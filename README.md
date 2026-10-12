@@ -1,0 +1,172 @@
+# cs-qa-mvp
+
+과거 CS 문의·답변을 주제별 위키로 정리해 두고, 고객 질문이 들어오면 **위키 검색 → Microsoft-Decision-1로 페이지 선택 → Claude로 답변 생성**하는 CS 자동응답 챗봇 MVP입니다.
+
+답변 말풍선을 누르면 어떤 파일을 어떤 경로로 찾았고, 왜 그 파일을 골랐고, 답을 어떻게 구성했는지를 모달에서 단계별로 볼 수 있습니다.
+
+![답변 생성 경로 모달](docs/trace-modal.png)
+
+## 빠른 시작
+
+API 키가 없어도 실행됩니다. 키가 없는 단계는 건너뛰고, 왜 건너뛰었는지가 상세 모달에 표시됩니다.
+
+**필요한 것:** Python 3.10 이상. macOS 기본 `python3`는 3.9라서 쓸 수 없으니 `brew install python@3.13` 등으로 설치하세요.
+
+```bash
+git clone <this repo> && cd cs-qa-mvp
+make setup      # .venv 생성 + 의존성 설치
+make run        # http://localhost:8000
+```
+
+`make`가 없다면 같은 일을 직접 실행하면 됩니다.
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+브라우저에서 http://localhost:8000 을 열고 질문을 입력하거나 예시 버튼을 누르세요. 상단 칩에서 Decision-1과 LLM의 연결 상태를 확인할 수 있습니다.
+
+## API 키 설정
+
+키는 저장소에 절대 넣지 않습니다. **실행할 때 환경변수로 주입**하는 방식이며, 두 가지 방법 중 하나를 쓰면 됩니다.
+
+**방법 1. 셸에서 export (권장)**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export DECISION_ENDPOINT=https://<resource>.services.ai.azure.com
+export DECISION_DEPLOYMENT=<배포 이름>
+export DECISION_API_KEY=<Foundry 키>
+make run
+```
+
+**방법 2. `.env` 파일**
+
+```bash
+cp .env.example .env   # 값을 채운다. .env 는 .gitignore 에 들어 있어 커밋되지 않는다.
+make run
+```
+
+셸 환경변수가 `.env`보다 우선합니다. 키를 바꾼 뒤에는 서버를 재시작하세요.
+
+### Claude API 키
+
+[Claude Console](https://console.anthropic.com/)에서 발급받아 `ANTHROPIC_API_KEY`에 넣습니다. 기본 모델은 `claude-opus-5-5`이고, `LLM_MODEL`로 바꿀 수 있습니다. 비용을 줄이려면 `claude-sonnet-5-5`나 `claude-haiku-4-5`를 쓰세요.
+
+Claude는 두 곳에서 쓰입니다.
+
+1. **검색어 변환:** 위키가 영어라서, 한국어 질문을 영어 검색어로 바꿉니다.
+2. **답변 생성:** 선택된 위키 페이지만 근거로, 고객이 쓴 언어로 답합니다.
+
+안전 분류기가 요청을 거절하면 서버가 권장 모델로 자동 재시도하도록 `fallbacks: "default"`를 켜 두었습니다(`server-side-fallback-2026-07-01` 베타).
+
+### Microsoft-Decision-1 (Microsoft Foundry)
+
+1. [Foundry 포털](https://ai.azure.com) → 프로젝트 → **Model catalog** → `Microsoft-Decision-1` → **Deploy**
+2. 배포 상세 화면에서 **리소스 엔드포인트, 배포 이름, API 키**를 복사해 `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY`에 넣습니다.
+
+앱은 `POST {DECISION_ENDPOINT}/providers/microsoft/v1/systemone`을 `api-key` 헤더로 호출합니다. 자세한 내용은 [공식 문서](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)를 참고하세요.
+
+## 동작 방식
+
+```
+질문
+ │
+ ├─ 1. 검색어 변환   한국어면 Claude가 영어 검색어로 변환 (영어면 건너뜀)
+ ├─ 2. 위키 검색     BM25 키워드 검색으로 후보 페이지 8개 추림
+ ├─ 3. 페이지 선택   Decision-1이 후보 + '해당 없음' 중 하나를 확률과 함께 선택
+ └─ 4. 답변 구성     아래 중 하나
+        ├─ LLM 생성       선택 페이지(필요하면 2순위까지)를 근거로 Claude가 답변
+        ├─ 위키 답변 그대로  확률 ≥ DIRECT_ANSWER_THRESHOLD 이면 LLM 호출 없이 대표 답변 발송 (기본 꺼짐)
+        └─ 상담원 연결     '해당 없음'이거나 확률 < MIN_CONFIDENCE 이면 LLM 호출 없이 연결 안내
+```
+
+**키가 없을 때의 동작:**
+
+| 상황 | 동작 |
+|---|---|
+| Decision-1 키 없음 | BM25 1위 페이지를 그대로 사용합니다. **"해당 없음" 판정이 없어서 엉뚱한 질문에도 아무 페이지로 답합니다.** |
+| Claude 키 없음 | 위키 대표 답변(영어 원문)을 그대로 보여 줍니다. 한국어 질문은 검색어 변환을 못 해서 대부분 상담원 연결로 빠집니다. |
+| API 호출 실패 | 위 동작으로 대체하고, 모달 상단에 경고를 표시합니다. |
+
+### 상세 모달에서 볼 수 있는 것
+
+- 답변 방식, 총 소요 시간, 추정 비용, 판단 근거
+- 단계별 상태(완료/건너뜀/오류), 소요 시간, 건너뛴 이유
+- 검색 후보 페이지와 BM25 점수 (제목을 누르면 위키 본문 미리보기)
+- Decision-1이 매긴 선택지별 확률
+- Claude 모델, effort, 근거 파일, 토큰 수, 비용
+- 답변에 실제로 사용한 위키 파일 전문
+- 원본 trace JSON
+
+## 환경변수
+
+| 이름 | 기본값 | 설명 |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | (없음) | Claude API 키 |
+| `LLM_MODEL` | `claude-opus-5-5` | 답변 생성 모델 |
+| `LLM_EFFORT` | `medium` | `low` / `medium` / `high` / `xhigh` / `max` |
+| `REWRITE_MODEL` | `LLM_MODEL`과 같음 | 검색어 변환 모델 (항상 effort `low`) |
+| `DECISION_ENDPOINT` | (없음) | Foundry 리소스 엔드포인트 |
+| `DECISION_DEPLOYMENT` | (없음) | Foundry 배포 이름 |
+| `DECISION_API_KEY` | (없음) | Foundry API 키 |
+| `SEARCH_TOP_K` | `8` | Decision-1에 넘길 후보 수 |
+| `MIN_CONFIDENCE` | `0.5` | 이보다 낮으면 상담원 연결 |
+| `SECOND_PAGE_MIN` | `0.2` | 2순위 확률이 이 이상이면 근거로 함께 전달 |
+| `DIRECT_ANSWER_THRESHOLD` | (꺼짐) | 이 확률 이상이면 LLM 없이 대표 답변 발송 |
+| `WIKI_DIR` | `wiki/` | 위키 위치 |
+
+**임계값은 추정치입니다.** 실제 CS 데이터로 정답률을 재 보고 조정하세요.
+
+## 위키와 데이터
+
+`wiki/`에는 이미 생성된 페이지 87개가 들어 있어서 바로 실행할 수 있습니다. 주제 하나당 페이지 하나이고, 각 페이지에는 대표 답변, 질문 예시 20개, 답변 사례 3개가 들어 있습니다. 검색용 질문 예시(주제당 최대 400개)는 `wiki/_index.jsonl`에 따로 저장돼 있습니다.
+
+| 출처 | 페이지 | 라이선스 | 내용 |
+|---|---|---|---|
+| bitext | 27 | CDLA-Sharing-1.0 | 주문, 환불, 계정 등 일반 CS intent |
+| sft50k | 20 | Apache-2.0 | 업종별(이커머스, SaaS, 은행, 여행 등) 이슈 |
+| ecommerce | 40 | MIT | 이커머스 이슈별 요약 질문과 해결책 |
+
+원본에서 다시 만들려면 다음을 실행합니다.
+
+```bash
+make data    # Hugging Face에서 6개 데이터셋 다운로드(약 400MB) → data/normalized/*.jsonl (약 1.1GB)
+make wiki    # data/normalized → wiki/
+```
+
+`data/`는 커밋하지 않습니다. 정규화 단계에는 twitter(실제 기업 트위터 CS 77만 건)와 tickets(IT 티켓)도 포함되지만, **비상업(NC) 라이선스라 위키에는 넣지 않습니다.**
+
+## 테스트
+
+```bash
+make test
+```
+
+외부 API 대신 가짜 Claude와 가짜 Decision-1을 써서 라우팅 분기(상담원 연결, 낮은 확신, 2순위 페이지 포함, 직접 답변, API 실패 시 대체)와 HTTP API를 검증합니다.
+
+## 구조
+
+```
+app/
+  main.py       FastAPI 앱, /api/chat · /api/status · /api/wiki/{id}
+  pipeline.py   검색어 변환 → 검색 → 선택 → 답변, 단계별 trace 기록
+  wiki.py       위키 로딩, BM25 검색
+  decision.py   Microsoft-Decision-1 클라이언트
+  llm.py        Claude 클라이언트, 프롬프트, 비용 추정
+  config.py     환경변수
+static/         채팅 UI (빌드 단계 없는 HTML/CSS/JS)
+scripts/        download.sh → normalize.py → build_wiki.py
+wiki/           생성된 위키 (커밋됨)
+tests/
+```
+
+## 한계
+
+- **위키가 영어입니다.** 한국어 질문은 Claude로 검색어를 변환해야 검색이 됩니다. 실제 서비스에서는 한국어 CS 기록으로 위키를 만들어야 합니다.
+- **sft50k 대표 답변은 특정 고객 건의 기록입니다.** "$79 환불 완료" 같은 내용이 들어 있습니다. 프롬프트로 그대로 옮기지 못하게 막아 두었지만, Claude 키 없이 원문을 보여 줄 때는 앞에 경고 문구를 붙입니다.
+- **대화 맥락이 없습니다.** 질문 하나하나를 독립적으로 처리합니다.
+- **Decision-1의 확률은 이 데이터로 검증되지 않았습니다.** 2026-10-09에 출시된 모델이라, 실제 데이터로 정답률을 측정한 뒤 임계값을 정해야 합니다.
+- 추정 비용은 공개 단가 기준 계산값이며 실제 청구액과 다를 수 있습니다.

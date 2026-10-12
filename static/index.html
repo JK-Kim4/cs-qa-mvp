@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS QA MVP</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">CS QA MVP</div>
+      <div class="status" id="status">상태 확인 중…</div>
+    </header>
+
+    <main class="chat" id="chat">
+      <div class="empty" id="empty">
+        <p class="empty-title">고객 문의를 입력해 보세요</p>
+        <p class="empty-sub">답변 말풍선을 누르면 어떤 위키 파일을 찾아 어떻게 답을 만들었는지 볼 수 있어요.</p>
+        <div class="samples" id="samples"></div>
+      </div>
+    </main>
+
+    <form class="composer" id="composer">
+      <textarea id="input" rows="1" placeholder="예) 주문을 취소하고 싶어요" autocomplete="off"></textarea>
+      <button type="submit" id="send">보내기</button>
+    </form>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h2 id="modal-title">답변 생성 경로</h2>
+        <button class="icon-btn" data-close aria-label="닫기">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

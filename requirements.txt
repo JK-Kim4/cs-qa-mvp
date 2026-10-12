@@ -1,0 +1,9 @@
+anthropic==1.13.0
+fastapi==0.143.0
+httpx==0.28.1
+python-dotenv==1.2.4
+uvicorn[standard]==0.54.0
+# 데이터 재생성(scripts/)용
+pyarrow==26.0.0
+# 테스트
+pytest==9.1.1
