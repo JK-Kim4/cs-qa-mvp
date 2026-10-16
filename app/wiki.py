@@ -34,6 +34,7 @@ class Page:
     records: int
     examples: list
     search_text: str
+    license: str = ""
 
     def body(self, wiki_dir: Path):
         text = (wiki_dir / self.path).read_text(encoding="utf-8")
@@ -63,6 +64,27 @@ class BM25:
         return out
 
 
+# 가이드 화면에 보여 줄 데이터셋·그룹 설명. 위키 원문은 영어라 한국어 이름을 붙인다.
+DATASETS = {
+    "bitext": ("일반 CS", "주문·환불·계정 등 일반 고객센터 문의 유형"),
+    "ecommerce": ("이커머스", "배송·보증·반품 등 이커머스 FAQ"),
+    "sft50k": ("업종별", "은행·SaaS·여행 등 업종별 고객 이슈"),
+}
+GROUP_KO = {
+    "ACCOUNT": "계정", "CANCEL": "취소 수수료", "CONTACT": "상담 연결", "DELIVERY": "배송 기간", "FEEDBACK": "불만·리뷰",
+    "INVOICE": "청구서", "ORDER": "주문", "PAYMENT": "결제", "REFUND": "환불", "SHIPPING": "배송지", "SUBSCRIPTION": "구독",
+    "Cancellations and returns": "취소·반품", "Login and Account": "로그인·계정", "Order": "주문", "Shipping": "배송",
+    "Shopping": "쇼핑", "Warranty": "보증",
+    "banking": "은행", "ecommerce": "이커머스", "food_delivery": "음식 배달", "healthcare": "의료", "hr_internal": "사내 인사",
+    "saas": "SaaS", "telecom": "통신", "travel": "여행",
+}
+
+
+def readable(text):
+    """{{Order Number}} 같은 자리표시자를 [Order Number] 로 바꿔 사람이 읽기 쉽게 한다."""
+    return PLACEHOLDER.sub(lambda m: f"[{m.group(0)[2:-2].strip()}]", text)
+
+
 class Wiki:
     def __init__(self, wiki_dir: Path):
         self.dir = wiki_dir
@@ -74,6 +96,33 @@ class Wiki:
             self.pages = [Page(**{k: v for k, v in json.loads(l).items() if k in fields}) for l in f]
         self.by_id = {p.id: p for p in self.pages}
         self.bm25 = BM25([tokenize(p.search_text) for p in self.pages])
+
+    def guide(self, excerpt_chars=320):
+        """데이터셋 → 그룹 → 주제 구조. 주제마다 예시 질문과 대표 답변 앞부분을 담는다."""
+        datasets = {}
+        for p in self.pages:
+            label, desc = DATASETS.get(p.source, (p.source, ""))
+            ds = datasets.setdefault(p.source, {"id": p.source, "label": label, "desc": desc, "license": p.license,
+                                                "pages": 0, "records": 0, "groups": {}})
+            m = re.search(r"^## 대표 답변\n(.*?)(?=^## )", p.body(self.dir), flags=re.S | re.M)
+            answer = " ".join(l for l in (m.group(1) if m else "").strip().splitlines() if not l.startswith(">")).strip()
+            answer = readable(answer)
+            group = ds["groups"].setdefault(p.group, {"name": p.group, "label": GROUP_KO.get(p.group, p.group), "topics": []})
+            group["topics"].append({
+                "id": p.id,
+                "title": p.title.split(" · ", 1)[-1],
+                "path": f"wiki/{p.path}",
+                "records": p.records,
+                "examples": [readable(e) for e in p.examples[:3]],
+                "answer": answer[:excerpt_chars] + ("…" if len(answer) > excerpt_chars else ""),
+            })
+            ds["pages"] += 1
+            ds["records"] += p.records
+        out = [{**d, "groups": list(d["groups"].values())} for d in datasets.values()]
+        return {
+            "total": {"pages": len(self.pages), "records": sum(d["records"] for d in out), "datasets": len(out)},
+            "datasets": out,
+        }
 
     def search(self, query, k):
         q = tokenize(query)

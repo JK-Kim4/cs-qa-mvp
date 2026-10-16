@@ -191,3 +191,84 @@ pre.json {
 .cmp-head { display: flex; flex-direction: column; gap: 2px; font-size: 13px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .cmp-head span { color: var(--muted); font-size: 12px; }
 .cmp-diff { margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+/* ---- 데이터 가이드 ---- */
+.guide-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.guide-btn:hover { background: var(--chip-bg); }
+.help-btn {
+  width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font: inherit; font-weight: 700; cursor: pointer;
+}
+.help-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.guide-panel { width: min(1060px, calc(100% - 32px)); height: min(820px, calc(100% - 48px)); }
+.guide-panel .modal-head { align-items: flex-start; }
+.guide-sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.guide-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; padding: 14px 18px; }
+.guide-tab {
+  text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+}
+.guide-tab span { font-size: 12px; color: var(--muted); }
+.guide-tab[aria-selected="true"] { border: 2px solid var(--accent); padding: 9px 11px; }
+.guide-tab[aria-selected="true"] strong { color: var(--accent); }
+.guide-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; border-top: 1px solid var(--line); }
+.guide-list { overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
+.guide-search { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
+.guide-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.guide-search:focus-within { border-color: var(--accent); }
+#guide-groups { display: flex; flex-direction: column; gap: 14px; }
+.guide-group-head { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+.guide-group-head span { font-weight: 400; }
+.guide-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.guide-chip {
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.guide-chip:hover { border-color: var(--accent); }
+.guide-chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.guide-empty { color: var(--muted); font-size: 13px; }
+.guide-detail { overflow-y: auto; padding: 16px 18px; border-left: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; gap: 14px; }
+.guide-detail-head { display: flex; flex-direction: column; gap: 4px; }
+.guide-detail-head strong { font-size: 17px; }
+.guide-detail .muted { font-size: 12px; color: var(--muted); }
+.guide-detail-sec { display: flex; flex-direction: column; gap: 6px; }
+.guide-detail-sec .label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.guide-ask {
+  text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.guide-ask:hover { border-color: var(--accent); }
+.guide-answer { margin: 0; font-size: 13px; line-height: 1.6; }
+.guide-body summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.guide-body .md { margin-top: 8px; font-size: 13px; }
+@media (max-width: 720px) {
+  .guide-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 14px; }
+  .guide-tab span:last-child { display: none; }
+  .guide-main { grid-template-columns: 1fr; overflow-y: auto; }
+  .guide-list, .guide-detail { overflow: visible; }
+  .guide-detail { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/* ---- 사용법 안내 ---- */
+.tour { position: fixed; inset: 0; z-index: 20; }
+.tour[hidden] { display: none; }
+.tour-spot {
+  position: fixed; border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55);
+  outline: 2px solid var(--accent); transition: all .2s ease; pointer-events: none;
+}
+.tour-card {
+  position: fixed; width: min(320px, calc(100% - 16px)); box-sizing: border-box; padding: 14px 16px;
+  background: var(--panel); color: var(--text); border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 12px 32px rgba(0, 0, 0, .25);
+}
+.tour-step { font-size: 12px; color: var(--muted); }
+.tour-card h3 { margin: 4px 0 6px; font-size: 16px; }
+.tour-card p { margin: 0 0 12px; font-size: 14px; }
+.tour-actions { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; }
+.tour-actions button { padding: 6px 12px; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; }
+.tour-skip { border: 0; background: none; color: var(--muted); padding-left: 0; }
+.tour-prev { border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+.tour-next { border: 0; background: var(--accent); color: var(--accent-text); font-weight: 600; }

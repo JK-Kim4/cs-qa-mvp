@@ -234,5 +234,9 @@ def test_http_api(settings):
     assert client.get(f"/api/wiki/{page_id}").status_code == 200
     assert client.get("/").status_code == 200
     assert client.post("/api/chat", json={"question": ""}).status_code == 422
+    g = client.get("/api/guide").json()
+    assert g["total"]["pages"] == 87 and g["total"]["datasets"] == 3
+    topics = [t for d in g["datasets"] for grp in d["groups"] for t in grp["topics"]]
+    assert len(topics) == 87 and all(t["examples"] and "{{" not in t["answer"] for t in topics)
     cmp = client.post("/api/chat", json={"question": "refund please", "compare": True}).json()
     assert cmp["with_decision"]["trace"]["steps"] and cmp["bypass"]["trace"]["path"] == "bypass"

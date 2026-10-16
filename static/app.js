@@ -66,8 +66,8 @@ function md(text) {
 async function loadStatus() {
   try {
     const s = await (await fetch("/api/status")).json();
+    $("#guide-btn-label").textContent = `데이터 가이드 · ${s.pages}주제`;
     $("#status").innerHTML = [
-      `<span class="chip">위키 ${s.pages}페이지</span>`,
       `<span class="chip ${s.decision.enabled ? "on" : "off"}">${s.decision.enabled ? `${esc(s.decision.label)} 연결됨` : "판단 모델 미설정"}</span>`,
       `<span class="chip ${s.llm.enabled ? "on" : "off"}">LLM ${s.llm.enabled ? esc(s.llm.model) : "미설정"}</span>`,
     ].join("");
@@ -312,7 +312,12 @@ modal.addEventListener("click", (e) => {
   const link = e.target.closest("[data-page]");
   if (link) togglePreview(link.dataset.page);
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!tour.hidden) endTour();
+  else if (!guide.hidden) closeGuide();
+  else if (!modal.hidden) closeModal();
+});
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -331,5 +336,192 @@ input.addEventListener("input", () => { input.style.height = ""; input.style.hei
 $("#samples").innerHTML = SAMPLES.map((s) => `<button type="button">${esc(s)}</button>`).join("");
 $("#samples").addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") ask(e.target.textContent); });
 
+// ---- 데이터 가이드 ----
+
+const guide = $("#guide");
+const guideState = { data: null, tab: "all", topic: null, q: "" };
+const topicIndex = new Map();
+
+async function openGuide() {
+  guide.hidden = false;
+  document.body.style.overflow = "hidden";
+  if (!guideState.data) {
+    try {
+      guideState.data = await (await fetch("/api/guide")).json();
+      for (const ds of guideState.data.datasets)
+        for (const g of ds.groups) for (const t of g.topics) topicIndex.set(t.id, { t, ds, g });
+    } catch {
+      $("#guide-sub").textContent = "가이드를 불러오지 못했습니다";
+      return;
+    }
+  }
+  renderGuide();
+  $("#guide-q").focus();
+}
+
+function closeGuide() {
+  guide.hidden = true;
+  document.body.style.overflow = "";
+}
+
+function topicMatches(t, ds, g, q) {
+  if (!q) return true;
+  const hay = [t.title, g.name, g.label, ds.label, ds.id, ...t.examples].join(" ").toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function renderGuide() {
+  const { data, tab } = guideState;
+  const q = guideState.q.trim().toLowerCase();
+  const n = (v) => v.toLocaleString();
+  $("#guide-sub").textContent =
+    `공개 CS 데이터셋 ${data.total.datasets}개를 주제별로 정리한 위키 ${data.total.pages}페이지(원본 기록 ${n(data.total.records)}건)를 검색합니다. ` +
+    "위키가 영어라서 한국어 질문은 영어 검색어로 바꿔 찾고, 맞는 주제가 없으면 상담원 연결로 안내합니다.";
+
+  const tabs = [{ id: "all", label: "전체", meta: `${data.total.pages}주제 · ${n(data.total.records)}건`, desc: `데이터셋 ${data.total.datasets}개` }]
+    .concat(data.datasets.map((d) => ({ id: d.id, label: `${d.id} · ${d.label}`, meta: `${d.pages}주제 · ${n(d.records)}건`, desc: `${d.desc} · ${d.license}` })));
+  $("#guide-tabs").innerHTML = tabs
+    .map((t) => `<button type="button" role="tab" class="guide-tab" data-tab="${esc(t.id)}" aria-selected="${t.id === tab}">
+        <strong>${esc(t.label)}</strong><span>${esc(t.meta)}</span><span>${esc(t.desc)}</span></button>`)
+    .join("");
+
+  // 검색어가 선택한 데이터셋에 없으면 전체에서 찾아 보여 준다.
+  const inTab = (d) => tab === "all" || d.id === tab;
+  const hits = (d) => d.groups.some((g) => g.topics.some((t) => topicMatches(t, d, g, q)));
+  const widened = q && tab !== "all" && !data.datasets.some((d) => inTab(d) && hits(d)) && data.datasets.some(hits);
+  const sets = data.datasets.filter((d) => widened || inTab(d));
+  const showAll = tab === "all" || widened;
+  const visible = [];
+  const html = sets
+    .flatMap((ds) =>
+      ds.groups.map((g) => {
+        const topics = g.topics.filter((t) => topicMatches(t, ds, g, q));
+        if (!topics.length) return "";
+        visible.push(...topics.map((t) => t.id));
+        const head = showAll ? `${ds.id} · ${g.label}` : `${g.label} · ${g.name}`;
+        return `<div class="guide-group"><div class="guide-group-head">${esc(head)} <span>· ${topics.length}</span></div>
+          <div class="guide-chips">${topics
+            .map((t) => `<button type="button" class="guide-chip" data-topic="${esc(t.id)}" aria-pressed="${t.id === guideState.topic}">${esc(t.title)}</button>`)
+            .join("")}</div></div>`;
+      })
+    )
+    .join("");
+  const note = widened ? `<p class="guide-empty">선택한 데이터셋에는 "${esc(guideState.q)}" 주제가 없어 전체에서 찾았어요.</p>` : "";
+  $("#guide-groups").innerHTML = html
+    ? note + html
+    : `<p class="guide-empty">"${esc(guideState.q)}"에 맞는 주제가 없습니다. 이런 질문은 상담원 연결로 안내됩니다.</p>`;
+
+  if (!visible.includes(guideState.topic)) guideState.topic = visible[0] || null;
+  $("#guide-groups").querySelectorAll(".guide-chip").forEach((b) => b.setAttribute("aria-pressed", b.dataset.topic === guideState.topic));
+  renderGuideDetail();
+}
+
+function renderGuideDetail() {
+  const box = $("#guide-detail");
+  const hit = topicIndex.get(guideState.topic);
+  if (!hit) { box.innerHTML = `<p class="guide-empty">주제를 고르면 예시 질문과 대표 답변을 볼 수 있어요.</p>`; return; }
+  const { t, ds, g } = hit;
+  box.innerHTML = `
+    <div class="guide-detail-head">
+      <span class="muted">${esc(ds.id)} · ${esc(g.label)} (${esc(g.name)})</span>
+      <strong>${esc(t.title)}</strong>
+      <span class="muted">근거 기록 ${t.records.toLocaleString()}건 · <span class="path">${esc(t.path)}</span></span>
+    </div>
+    <div class="guide-detail-sec">
+      <span class="label">이런 질문에 답할 수 있어요 (눌러서 바로 질문)</span>
+      ${t.examples.map((e) => `<button type="button" class="guide-ask" data-ask="${esc(e)}">${esc(e)}</button>`).join("")}
+    </div>
+    <div class="guide-detail-sec">
+      <span class="label">대표 답변 (앞부분)</span>
+      <p class="guide-answer">${esc(t.answer) || "대표 답변 없음"}</p>
+    </div>
+    <details class="guide-body" data-body="${esc(t.id)}"><summary>위키 본문 전체 보기</summary><div class="md"></div></details>`;
+}
+
+$("#guide-btn").addEventListener("click", openGuide);
+guide.addEventListener("click", (e) => {
+  if (e.target.closest("[data-close]")) return closeGuide();
+  const tab = e.target.closest("[data-tab]");
+  if (tab) { guideState.tab = tab.dataset.tab; guideState.topic = null; return renderGuide(); }
+  const chip = e.target.closest("[data-topic]");
+  if (chip) { guideState.topic = chip.dataset.topic; return renderGuide(); }
+  const askBtn = e.target.closest("[data-ask]");
+  if (askBtn && !sendBtn.disabled) { closeGuide(); ask(askBtn.dataset.ask.replace(/…$/, "")); }
+});
+guide.addEventListener("toggle", async (e) => {
+  const d = e.target.closest?.("details[data-body]");
+  if (!d || !d.open || d.dataset.loaded) return;
+  const box = d.querySelector(".md");
+  box.textContent = "불러오는 중…";
+  try {
+    box.innerHTML = md((await (await fetch(`/api/wiki/${d.dataset.body}`)).json()).body);
+    d.dataset.loaded = "1";
+  } catch {
+    box.textContent = "본문을 불러오지 못했습니다";
+  }
+}, true);
+$("#guide-q").addEventListener("input", (e) => { guideState.q = e.target.value; renderGuide(); });
+
+// ---- 첫 방문 사용법 안내 (브라우저당 한 번, 쿠키로 기억) ----
+
+const tour = $("#tour");
+const TOUR_COOKIE = "cs_qa_tour";
+const TOUR_STEPS = [
+  { sel: "#input", title: "질문 입력", text: "고객 문의를 입력하고 Enter로 보냅니다. 줄바꿈은 Shift+Enter예요." },
+  { sel: "#guide-btn", title: "데이터 가이드", text: "어떤 데이터셋이 들어 있고 어떤 주제로 질문할 수 있는지 봅니다. 예시 질문을 누르면 바로 물어볼 수 있어요." },
+  { sel: ".toggle", title: "비교 모드", text: "켜면 같은 질문을 판단 모델 경로와 바이패스 경로로 동시에 처리해 답변·비용·시간을 나란히 비교합니다." },
+  { sel: "#status", title: "연결 상태", text: "판단 모델과 LLM이 어떤 구현체로 연결됐는지 보여 줍니다. 회색 점은 키가 설정되지 않은 상태예요." },
+  { sel: "#chat", title: "답변 상세 보기", text: "답변 말풍선을 누르면 어떤 위키를 찾아 왜 골랐고 어떻게 답을 만들었는지, 단계별 비용과 시간을 볼 수 있어요." },
+  { sel: "#tour-btn", title: "안내 다시 보기", text: "이 안내는 처음 접속할 때 한 번만 나와요. ? 버튼을 누르면 언제든 다시 볼 수 있습니다." },
+];
+let tourIdx = 0;
+
+const tourSeen = () => document.cookie.split("; ").some((c) => c === `${TOUR_COOKIE}=done`);
+
+function startTour() {
+  tourIdx = 0;
+  tour.hidden = false;
+  showTourStep();
+  $("#tour-next").focus();
+}
+
+function endTour() {
+  tour.hidden = true;
+  document.cookie = `${TOUR_COOKIE}=done; max-age=${60 * 60 * 24 * 365}; path=/; SameSite=Lax`;
+  input.focus();
+}
+
+function showTourStep() {
+  const step = TOUR_STEPS[tourIdx];
+  const target = $(step.sel);
+  if (!target) return endTour();
+  const r = target.getBoundingClientRect();
+  const pad = 6;
+  Object.assign($("#tour-spot").style, {
+    left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px`,
+  });
+  $("#tour-step").textContent = `${tourIdx + 1} / ${TOUR_STEPS.length}`;
+  $("#tour-title").textContent = step.title;
+  $("#tour-text").textContent = step.text;
+  $("#tour-prev").hidden = tourIdx === 0;
+  $("#tour-next").textContent = tourIdx === TOUR_STEPS.length - 1 ? "시작하기" : "다음";
+
+  // 카드는 대상 아래에, 공간이 없으면 위에 둔다. 대상이 화면 대부분이면 가운데.
+  const card = $("#tour-card");
+  const cw = card.offsetWidth, ch = card.offsetHeight, gap = 12, vw = innerWidth, vh = innerHeight;
+  let top = r.bottom + pad + gap;
+  if (top + ch > vh - 8) top = r.top - pad - gap - ch;
+  if (top < 8) top = (vh - ch) / 2;
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - cw / 2), vw - cw - 8);
+  Object.assign(card.style, { top: `${top}px`, left: `${left}px` });
+}
+
+$("#tour-next").addEventListener("click", () => (tourIdx < TOUR_STEPS.length - 1 ? (tourIdx++, showTourStep()) : endTour()));
+$("#tour-prev").addEventListener("click", () => { if (tourIdx > 0) { tourIdx--; showTourStep(); } });
+$("#tour-skip").addEventListener("click", endTour);
+$("#tour-btn").addEventListener("click", startTour);
+addEventListener("resize", () => { if (!tour.hidden) showTourStep(); });
+
 loadStatus();
 input.focus();
+if (!tourSeen()) setTimeout(startTour, 400);

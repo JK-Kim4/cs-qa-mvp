@@ -38,6 +38,18 @@ def chat(req: ChatRequest):
     return pipeline.compare(question) if req.compare else pipeline.run(question)
 
 
+@app.get("/api/guide")
+def guide():
+    """데이터셋/주제 가이드. 위키는 실행 중 바뀌지 않으므로 처음 한 번만 만든다."""
+    global _guide
+    if _guide is None:
+        _guide = pipeline.wiki.guide()
+    return _guide
+
+
+_guide = None
+
+
 @app.get("/api/wiki/{page_id:path}")
 def wiki_page(page_id: str):
     page = pipeline.wiki.by_id.get(page_id)
