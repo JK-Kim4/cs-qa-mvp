@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=False)
 
 
+DEFAULT_MODELS = {"openai": "gpt-5-mini", "anthropic": "claude-opus-5-5"}
+DECISION_PROVIDERS = ("typesafe", "openrouter", "azure")
+
+
 def _float(name, default):
     raw = os.getenv(name)
     return float(raw) if raw not in (None, "") else default
@@ -24,12 +28,19 @@ def _int(name, default):
 @dataclass(frozen=True)
 class Settings:
     wiki_dir: Path
-    # Claude
+    # LLM (openai | anthropic)
+    llm_provider: str
+    openai_api_key: str | None
     anthropic_api_key: str | None
     llm_model: str
     llm_effort: str
     rewrite_model: str
-    # Microsoft-Decision-1 (Microsoft Foundry)
+    # 판단 모델 (app/decision.py 의 구현체 중 하나). None 이면 키가 설정된 구현체를 자동 선택
+    decision_provider: str | None
+    typesafe_api_key: str | None
+    typesafe_model: str
+    openrouter_api_key: str | None
+    openrouter_model: str
     decision_endpoint: str | None
     decision_deployment: str | None
     decision_api_key: str | None
@@ -40,23 +51,40 @@ class Settings:
     second_page_min: float
 
     @property
-    def llm_enabled(self):
-        return bool(self.anthropic_api_key)
+    def llm_key_name(self):
+        return "OPENAI_API_KEY" if self.llm_provider == "openai" else "ANTHROPIC_API_KEY"
 
     @property
-    def decision_enabled(self):
-        return bool(self.decision_endpoint and self.decision_deployment and self.decision_api_key)
+    def llm_api_key(self):
+        return self.openai_api_key if self.llm_provider == "openai" else self.anthropic_api_key
+
+    @property
+    def llm_enabled(self):
+        return bool(self.llm_api_key)
 
 
 def load_settings():
     direct = os.getenv("DIRECT_ANSWER_THRESHOLD")
-    llm_model = os.getenv("LLM_MODEL", "claude-opus-5-5")
+    provider = (os.getenv("LLM_PROVIDER") or "openai").lower()
+    if provider not in DEFAULT_MODELS:
+        raise ValueError(f"LLM_PROVIDER 는 {' 또는 '.join(DEFAULT_MODELS)} 여야 합니다: {provider}")
+    llm_model = os.getenv("LLM_MODEL") or DEFAULT_MODELS[provider]
+    decision_provider = (os.getenv("DECISION_PROVIDER") or "").lower() or None
+    if decision_provider not in (None, *DECISION_PROVIDERS):
+        raise ValueError(f"DECISION_PROVIDER 는 {' / '.join(DECISION_PROVIDERS)} 중 하나여야 합니다: {decision_provider}")
     return Settings(
         wiki_dir=Path(os.getenv("WIKI_DIR", ROOT / "wiki")),
+        llm_provider=provider,
+        openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
         llm_model=llm_model,
         llm_effort=os.getenv("LLM_EFFORT", "medium"),
-        rewrite_model=os.getenv("REWRITE_MODEL", llm_model),
+        rewrite_model=os.getenv("REWRITE_MODEL") or llm_model,
+        decision_provider=decision_provider,
+        typesafe_api_key=os.getenv("TYPESAFE_API_KEY") or None,
+        typesafe_model=os.getenv("TYPESAFE_MODEL") or "jev-latest",
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or None,
+        openrouter_model=os.getenv("OPENROUTER_DECISION_MODEL") or "typesafe/jev-1.13",
         decision_endpoint=(os.getenv("DECISION_ENDPOINT") or "").rstrip("/") or None,
         decision_deployment=os.getenv("DECISION_DEPLOYMENT") or None,
         decision_api_key=os.getenv("DECISION_API_KEY") or None,

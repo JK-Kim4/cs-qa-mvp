@@ -1,21 +1,20 @@
 """질문 하나를 처리하는 파이프라인. 각 단계의 입력, 판단, 소요 시간을 trace 로 남긴다.
 
-검색어 변환 -> BM25 검색 -> Decision-1 선택 -> 라우팅 -> 답변 생성
+검색어 변환 -> BM25 검색 -> 판단 모델(Jev 또는 Decision-1) 선택 -> 라우팅 -> 답변 생성
 라우팅 결과는 셋 중 하나다.
-  generate: 선택된 위키 페이지를 근거로 Claude 가 답변 생성
+  generate: 선택된 위키 페이지를 근거로 LLM(OpenAI 또는 Claude) 이 답변 생성
   direct:   확신이 매우 높으면 위키 대표 답변을 그대로 발송 (DIRECT_ANSWER_THRESHOLD 설정 시)
   escalate: 맞는 페이지가 없거나 확신이 낮으면 상담원 연결
 """
 import re
 import time
 
-from .decision import NONE_KEY, DecisionClient, DecisionError
-from .llm import Claude, LLMError
+from .decision import NONE_KEY, DecisionError, select_decision
+from .llm import LLMError, make_llm
 from .wiki import Wiki
 
 CANNED_PREFIX = "[LLM 미사용: 위키 대표 답변 원문입니다. 과거 특정 고객 건의 기록일 수 있습니다]\n\n"
 ESCALATE_MESSAGE = "문의하신 내용은 정확한 안내를 위해 담당 상담원에게 연결해 드릴게요. 잠시만 기다려 주세요."
-DECISION_PRICE_PER_M = 0.042  # USD / 100만 입력 토큰, 출력은 무료
 HANGUL = re.compile(r"[가-힣]")
 
 
@@ -43,22 +42,34 @@ class Step:
 
 
 class Pipeline:
-    def __init__(self, settings, wiki=None, claude=None, decision=None):
+    def __init__(self, settings, wiki=None, llm=None, decision=None):
         self.s = settings
         self.wiki = wiki or Wiki(settings.wiki_dir)
-        self.claude = claude
-        if self.claude is None and settings.llm_enabled:
-            self.claude = Claude(settings.anthropic_api_key, settings.llm_model, settings.llm_effort, settings.rewrite_model)
-        self.decision = decision
-        if self.decision is None and settings.decision_enabled:
-            self.decision = DecisionClient(settings.decision_endpoint, settings.decision_deployment, settings.decision_api_key)
+        self.llm = llm if llm is not None else make_llm(settings)
+        if decision is not None:
+            self.decision, self.decision_reason = decision, "직접 주입"
+        else:
+            self.decision, self.decision_reason = select_decision(settings)
 
     def status(self):
         return {
             "pages": len(self.wiki.pages),
-            "llm": {"enabled": self.claude is not None, "model": self.s.llm_model if self.claude else None},
-            "decision": {"enabled": self.decision is not None},
+            "llm": {
+                "enabled": self.llm is not None,
+                "provider": self.s.llm_provider,
+                "model": self.s.llm_model if self.llm else None,
+            },
+            "decision": {
+                "enabled": self.decision is not None,
+                "provider": getattr(self.decision, "name", None),
+                "label": self.decision_label,
+                "reason": self.decision_reason,
+            },
         }
+
+    @property
+    def decision_label(self):
+        return getattr(self.decision, "label", None) or "판단 모델"
 
     def run(self, question):
         started = time.perf_counter()
@@ -86,12 +97,12 @@ class Pipeline:
             if not HANGUL.search(question):
                 st.update(status="skipped", reason="영어 질문이라 원문을 그대로 검색어로 사용")
                 return question
-            if not self.claude:
-                st.update(status="skipped", reason="ANTHROPIC_API_KEY 미설정. 한국어 원문으로 검색하면 영어 위키와 거의 매칭되지 않습니다.")
+            if not self.llm:
+                st.update(status="skipped", reason=f"{self.s.llm_key_name} 미설정. 한국어 원문으로 검색하면 영어 위키와 거의 매칭되지 않습니다.")
                 trace["warnings"].append("한국어 질문인데 LLM 키가 없어 검색어 변환을 건너뜀")
                 return question
             try:
-                r = self.claude.rewrite_query(question)
+                r = self.llm.rewrite_query(question)
             except LLMError as e:
                 st.update(status="error", reason=str(e))
                 return question
@@ -115,9 +126,9 @@ class Pipeline:
                 st["reason"] = "일치하는 키워드가 있는 페이지가 없음"
             return hits
 
-    # 3. Decision-1 이 후보 중 하나 또는 '해당 없음'을 고른다.
+    # 3. 판단 모델이 후보 중 하나 또는 '해당 없음'을 고른다.
     def _decide(self, question, query, candidates, trace, costs):
-        with Step(trace, "decide", "페이지 선택 (Decision-1)") as st:
+        with Step(trace, "decide", f"페이지 선택 ({self.decision_label})") as st:
             if not candidates:
                 st.update(status="skipped", reason="검색 후보가 없어 판단할 대상이 없음")
                 return "escalate", "검색 결과 없음", []
@@ -127,9 +138,9 @@ class Pipeline:
                     return self._decide_with_model(question, query, candidates, st, costs)
                 except DecisionError as e:
                     st.update(status="error", reason=f"{e} -> BM25 1위로 대체")
-                    trace["warnings"].append("Decision-1 호출 실패로 BM25 1위 페이지를 사용")
+                    trace["warnings"].append(f"{self.decision_label} 호출 실패로 BM25 1위 페이지를 사용")
             else:
-                st.update(status="skipped", reason="Decision-1 미설정 -> BM25 1위 페이지를 사용 (확률 기반 상담원 연결 판단 없음)")
+                st.update(status="skipped", reason=f"{self.decision_reason} -> BM25 1위 페이지를 사용 (확률 기반 상담원 연결 판단 없음)")
 
             top = candidates[0][0]
             st["detail"]["chosen"] = {"id": top.id, "path": f"wiki/{top.path}", "by": "bm25"}
@@ -150,8 +161,7 @@ class Pipeline:
         )
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
         usage = payload.get("usage") or {}
-        in_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        cost = round(in_tokens / 1e6 * DECISION_PRICE_PER_M, 8)
+        cost = self.decision.cost(usage)
         costs.append(cost)
         st["detail"] = {
             "options": [
@@ -168,7 +178,7 @@ class Pipeline:
 
         p_top = probs.get(choice, 0.0)
         if choice == NONE_KEY:
-            return "escalate", f"Decision-1 이 '해당 없음'을 선택 (p={p_top:.2f})", []
+            return "escalate", f"{self.decision_label} 이 '해당 없음'을 선택 (p={p_top:.2f})", []
         if p_top < self.s.min_confidence:
             return "escalate", f"최고 확률 {p_top:.2f} < MIN_CONFIDENCE {self.s.min_confidence}", []
 
@@ -178,10 +188,10 @@ class Pipeline:
             if k != choice and k in keys and v >= self.s.second_page_min:
                 chosen.append(keys[k])
                 break
-        st["detail"]["chosen"] = [{"id": p.id, "path": f"wiki/{p.path}", "by": "decision-1"} for p in chosen]
+        st["detail"]["chosen"] = [{"id": p.id, "path": f"wiki/{p.path}", "by": self.decision_label} for p in chosen]
         if self.s.direct_threshold is not None and p_top >= self.s.direct_threshold:
             return "direct", f"확률 {p_top:.2f} >= DIRECT_ANSWER_THRESHOLD {self.s.direct_threshold}", chosen[:1]
-        return "generate", f"Decision-1 선택 확률 {p_top:.2f} >= MIN_CONFIDENCE {self.s.min_confidence}", chosen
+        return "generate", f"{self.decision_label} 선택 확률 {p_top:.2f} >= MIN_CONFIDENCE {self.s.min_confidence}", chosen
 
     # 4. 라우팅 결과에 따라 답변을 만든다.
     def _answer(self, question, route, chosen, trace, costs):
@@ -198,12 +208,12 @@ class Pipeline:
                 st.update(reason="위키 대표 답변을 그대로 사용. LLM 을 호출하지 않음")
                 st["detail"] = {"mode": "direct", "source": bodies[0][0]}
                 return canned_answer(bodies[0][1])
-            if not self.claude:
-                st.update(status="skipped", reason="ANTHROPIC_API_KEY 미설정 -> 위키 대표 답변(영어)을 그대로 표시")
+            if not self.llm:
+                st.update(status="skipped", reason=f"{self.s.llm_key_name} 미설정 -> 위키 대표 답변(영어)을 그대로 표시")
                 st["detail"] = {"mode": "canned", "source": bodies[0][0]}
                 return CANNED_PREFIX + canned_answer(bodies[0][1])
             try:
-                r = self.claude.answer(question, bodies)
+                r = self.llm.answer(question, bodies)
             except LLMError as e:
                 st.update(status="error", reason=f"{e} -> 위키 대표 답변으로 대체")
                 st["detail"] = {"mode": "canned", "source": bodies[0][0]}

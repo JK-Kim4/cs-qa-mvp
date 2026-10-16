@@ -66,7 +66,7 @@ async function loadStatus() {
     const s = await (await fetch("/api/status")).json();
     $("#status").innerHTML = [
       `<span class="chip">위키 ${s.pages}페이지</span>`,
-      `<span class="chip ${s.decision.enabled ? "on" : "off"}">Decision-1 ${s.decision.enabled ? "연결됨" : "미설정"}</span>`,
+      `<span class="chip ${s.decision.enabled ? "on" : "off"}">${s.decision.enabled ? `${esc(s.decision.label)} 연결됨` : "판단 모델 미설정"}</span>`,
       `<span class="chip ${s.llm.enabled ? "on" : "off"}">LLM ${s.llm.enabled ? esc(s.llm.model) : "미설정"}</span>`,
     ].join("");
   } catch {

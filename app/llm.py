@@ -1,7 +1,8 @@
-"""Claude 호출: 검색어 변환과 답변 생성."""
+"""LLM 호출: 검색어 변환과 답변 생성. LLM_PROVIDER 로 OpenAI(기본) 와 Claude 중 하나를 쓴다."""
 import time
 
 import anthropic
+import openai
 
 # 100만 토큰당 (입력, 출력) USD. 비용 추정 표시용.
 PRICING = {
@@ -11,6 +12,10 @@ PRICING = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),
+    # 캐시 할인은 반영하지 않은 정가 기준.
+    "gpt-5": (1.25, 10.0),
+    "gpt-5-mini": (0.25, 2.0),
+    "gpt-5-nano": (0.05, 0.4),
 }
 
 REWRITE_SYSTEM = (
@@ -34,6 +39,7 @@ class LLMError(RuntimeError):
 
 
 def estimate_cost(model, usage):
+    # OpenAI 는 응답 모델명에 날짜가 붙으므로(gpt-5-mini-2025-08-07) 요청한 모델명으로 찾는다.
     price = PRICING.get(model)
     if not price or not usage:
         return None
@@ -91,3 +97,65 @@ class Claude:
         result = self._call(self.model, ANSWER_SYSTEM, user, self.effort, 8000)
         result["prompt_chars"] = len(ANSWER_SYSTEM) + len(user)
         return result
+
+
+class OpenAIChat:
+    """Claude 와 같은 인터페이스(rewrite_query, answer)를 Responses API 로 구현한다."""
+
+    def __init__(self, api_key, model, effort, rewrite_model):
+        self.client = openai.OpenAI(api_key=api_key)
+        self.model = model
+        self.effort = effort
+        self.rewrite_model = rewrite_model
+
+    def _call(self, model, system, user, effort, max_tokens):
+        start = time.perf_counter()
+        try:
+            resp = self.client.responses.create(
+                model=model,
+                instructions=system,
+                input=user,
+                # 추론 토큰도 max_output_tokens 에 포함되므로 여유 있게 둔다.
+                max_output_tokens=max_tokens,
+                reasoning={"effort": effort},
+                store=False,
+            )
+        except openai.AuthenticationError as e:
+            raise LLMError("OPENAI_API_KEY 가 올바르지 않습니다.") from e
+        except openai.RateLimitError as e:
+            raise LLMError("OpenAI API 요청 한도를 넘었거나 크레딧이 부족합니다. 잠시 후 다시 시도하세요.") from e
+        except openai.APIStatusError as e:
+            raise LLMError(f"OpenAI API 오류 {e.status_code}: {e.message}") from e
+        except openai.APIConnectionError as e:
+            raise LLMError("OpenAI API 에 연결할 수 없습니다.") from e
+
+        refusals = [c.refusal for item in resp.output if item.type == "message"
+                    for c in item.content if c.type == "refusal"]
+        if refusals:
+            raise LLMError("OpenAI 모델이 이 요청에 대한 답변을 거절했습니다.")
+        text = resp.output_text.strip()
+        stop_reason = resp.status
+        if resp.status == "incomplete" and resp.incomplete_details:
+            stop_reason = resp.incomplete_details.reason
+            if not text:
+                raise LLMError(f"OpenAI 응답이 중간에 끊겼습니다 ({stop_reason}).")
+        usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+        return {
+            "text": text,
+            "model": resp.model,
+            "stop_reason": stop_reason,
+            "usage": usage,
+            "cost_usd": estimate_cost(model, usage),
+            "latency_ms": round((time.perf_counter() - start) * 1000),
+        }
+
+    rewrite_query = Claude.rewrite_query
+    answer = Claude.answer
+
+
+def make_llm(settings):
+    """설정된 provider 의 클라이언트를 만든다. 키가 없으면 None."""
+    if not settings.llm_enabled:
+        return None
+    cls = OpenAIChat if settings.llm_provider == "openai" else Claude
+    return cls(settings.llm_api_key, settings.llm_model, settings.llm_effort, settings.rewrite_model)

@@ -1,20 +1,56 @@
 # cs-qa-mvp
 
-과거 CS 문의·답변을 주제별 위키로 정리해 두고, 고객 질문이 들어오면 **위키 검색 → Microsoft-Decision-1로 페이지 선택 → Claude로 답변 생성**하는 CS 자동응답 챗봇 MVP입니다.
+과거 CS 문의·답변을 주제별 위키로 정리해 두고, 고객 질문이 들어오면 **위키 검색 → 판단 모델(TypeSafe Jev 또는 Microsoft-Decision-1)로 페이지 선택 → LLM(OpenAI 기본, Claude 선택)으로 답변 생성**하는 CS 자동응답 챗봇 MVP입니다.
 
-답변 말풍선을 누르면 어떤 파일을 어떤 경로로 찾았고, 왜 그 파일을 골랐고, 답을 어떻게 구성했는지를 모달에서 단계별로 볼 수 있습니다.
+판단 모델은 텍스트를 생성하지 않고 선택지별 확률만 돌려주는 싸고 빠른 모델(System One)입니다. LLM 앞단에서 질문을 걸러, 맞는 위키 페이지가 없거나 확신이 낮으면 LLM을 호출하지 않고 상담원 연결로 보냅니다.
+
+답변 말풍선을 누르면 어떤 파일을 어떤 경로로 찾았고, 왜 그 파일을 골랐고, 답을 어떻게 구성했는지와 단계별 비용·지연 시간을 모달에서 볼 수 있습니다.
 
 ![답변 생성 경로 모달](docs/trace-modal.png)
 
 ## 빠른 시작
 
-API 키가 없어도 실행됩니다. 키가 없는 단계는 건너뛰고, 왜 건너뛰었는지가 상세 모달에 표시됩니다.
-
 **필요한 것:** Python 3.10 이상. macOS 기본 `python3`는 3.9라서 쓸 수 없으니 `brew install python@3.13` 등으로 설치하세요.
 
+### 1. 설치
+
 ```bash
-git clone <this repo> && cd cs-qa-mvp
+git clone https://github.com/JK-Kim4/cs-qa-mvp.git && cd cs-qa-mvp
 make setup      # .venv 생성 + 의존성 설치
+```
+
+### 2. 키 설정 (`.env`)
+
+```bash
+cp .env.example .env
+```
+
+`.env`를 열어 쓸 키만 채웁니다. `.env`는 `.gitignore`에 들어 있어 커밋되지 않습니다. **키는 모두 선택 사항이라 비워 둬도 앱은 실행됩니다.** 키가 없는 단계는 건너뛰고 그 이유가 상세 모달에 표시됩니다.
+
+최소 구성 예시 (OpenAI + OpenRouter의 Jev):
+
+```bash
+# 답변 생성 LLM
+OPENAI_API_KEY=sk-proj-...
+
+# 판단 모델: 아래 셋 중 하나만 채우면 그 구현체를 자동으로 씁니다
+OPENROUTER_API_KEY=sk-or-v1-...     # TypeSafe Jev via OpenRouter (가입 즉시 사용 가능)
+# TYPESAFE_API_KEY=...              # TypeSafe Jev 직접 호출
+# DECISION_ENDPOINT=... / DECISION_DEPLOYMENT=... / DECISION_API_KEY=...   # Microsoft-Decision-1
+```
+
+| 단계 | 키 | 발급 |
+|---|---|---|
+| 답변 생성·검색어 변환 (LLM) | `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` | [OpenAI](https://platform.openai.com/api-keys) / [Claude Console](https://console.anthropic.com/) |
+| 판단 모델 – Jev via OpenRouter | `OPENROUTER_API_KEY` | [OpenRouter Keys](https://openrouter.ai/keys) |
+| 판단 모델 – Jev 직접 | `TYPESAFE_API_KEY` | [TypeSafe Console](https://console.typesafe.ai) |
+| 판단 모델 – Decision-1 | `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY` | [Microsoft Foundry](https://ai.azure.com) (할당량 승인 필요, 아래 참고) |
+
+셸에서 `export`한 환경변수가 `.env`보다 우선합니다. 키를 바꾼 뒤에는 서버를 재시작하세요.
+
+### 3. 실행
+
+```bash
 make run        # http://localhost:8000
 ```
 
@@ -26,45 +62,75 @@ python3.13 -m venv .venv
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-브라우저에서 http://localhost:8000 을 열고 질문을 입력하거나 예시 버튼을 누르세요. 상단 칩에서 Decision-1과 LLM의 연결 상태를 확인할 수 있습니다.
+### 4. 어떤 구현체로 떴는지 확인
 
-## API 키 설정
+앱은 **시작할 때 한 번** 설정을 읽어 LLM과 판단 모델 구현체를 고르고, 서버 로그에 남깁니다.
 
-키는 저장소에 절대 넣지 않습니다. **실행할 때 환경변수로 주입**하는 방식이며, 두 가지 방법 중 하나를 쓰면 됩니다.
-
-**방법 1. 셸에서 export (권장)**
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export DECISION_ENDPOINT=https://<resource>.services.ai.azure.com
-export DECISION_DEPLOYMENT=<배포 이름>
-export DECISION_API_KEY=<Foundry 키>
-make run
+```
+INFO:     LLM: openai / gpt-5-mini
+INFO:     판단 모델: Jev via OpenRouter (typesafe/jev-1.13) (자동 선택: openrouter 키가 설정됨)
 ```
 
-**방법 2. `.env` 파일**
+같은 내용을 화면 상단 칩과 `GET /api/status`에서도 볼 수 있습니다.
 
-```bash
-cp .env.example .env   # 값을 채운다. .env 는 .gitignore 에 들어 있어 커밋되지 않는다.
-make run
+```json
+{"llm": {"enabled": true, "provider": "openai", "model": "gpt-5-mini"},
+ "decision": {"enabled": true, "provider": "openrouter", "label": "Jev via OpenRouter (typesafe/jev-1.13)", "reason": "자동 선택: openrouter 키가 설정됨"}}
 ```
 
-셸 환경변수가 `.env`보다 우선합니다. 키를 바꾼 뒤에는 서버를 재시작하세요.
+### 5. 구현체 바꾸기
 
-### Claude API 키
+`.env`에서 아래 값을 바꾸고 서버를 재시작합니다.
 
-[Claude Console](https://console.anthropic.com/)에서 발급받아 `ANTHROPIC_API_KEY`에 넣습니다. 기본 모델은 `claude-opus-5-5`이고, `LLM_MODEL`로 바꿀 수 있습니다. 비용을 줄이려면 `claude-sonnet-5-5`나 `claude-haiku-4-5`를 쓰세요.
+```bash
+LLM_PROVIDER=anthropic          # openai(기본) | anthropic
+DECISION_PROVIDER=azure         # typesafe | openrouter | azure. 비우면 키가 있는 첫 구현체를 typesafe → openrouter → azure 순으로 자동 선택
+```
 
-Claude는 두 곳에서 쓰입니다.
+`DECISION_PROVIDER`를 지정했는데 해당 키가 없으면 판단 단계를 건너뛰고(BM25 1위 페이지 사용), 시작 로그와 상세 모달에 `DECISION_PROVIDER=azure 인데 DECISION_API_KEY 미설정`처럼 이유를 남깁니다. 같은 질문 세트를 구현체별로 돌려 보면 상세 모달의 단계별 비용·지연 시간으로 결과와 비용을 비교할 수 있습니다.
+
+## API 키 상세
+
+### LLM API 키 (OpenAI 또는 Claude)
+
+`LLM_PROVIDER`로 고릅니다. 기본값은 `openai`이고, 고른 provider의 키만 있으면 됩니다.
+
+| `LLM_PROVIDER` | 키 | 기본 모델 | 발급 |
+|---|---|---|---|
+| `openai` (기본) | `OPENAI_API_KEY` | `gpt-5-mini` | [OpenAI Platform](https://platform.openai.com/api-keys) |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | [Claude Console](https://console.anthropic.com/) |
+
+모델은 `LLM_MODEL`로 바꿀 수 있습니다(예: `gpt-5`, `gpt-5-nano`, `claude-sonnet-5-5`). OpenAI는 Responses API를 쓰고 `LLM_EFFORT`를 `reasoning.effort`로 넘기므로, 모델이 지원하지 않는 effort 값(`gpt-5-mini`의 `xhigh`/`max` 등)을 주면 API 오류가 납니다.
+
+LLM은 두 곳에서 쓰입니다.
 
 1. **검색어 변환:** 위키가 영어라서, 한국어 질문을 영어 검색어로 바꿉니다.
 2. **답변 생성:** 선택된 위키 페이지만 근거로, 고객이 쓴 언어로 답합니다.
 
-안전 분류기가 요청을 거절하면 서버가 권장 모델로 자동 재시도하도록 `fallbacks: "default"`를 켜 두었습니다(`server-side-fallback-2026-07-01` 베타).
+Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 권장 모델로 자동 재시도하도록 `fallbacks: "default"`를 켜 두었습니다(`server-side-fallback-2026-07-01` 베타).
 
-### Microsoft-Decision-1 (Microsoft Foundry)
+### 판단 모델 (System One): TypeSafe Jev 또는 Microsoft-Decision-1
 
-1. [Foundry 포털](https://ai.azure.com) → 프로젝트 → **Model catalog** → `Microsoft-Decision-1` → **Deploy**
+검색 후보 중 어느 페이지로 답할지(또는 '해당 없음')를 텍스트 생성 없이 선택지별 확률로 고르는 단계입니다. LLM 앞단에서 이 단계가 질문을 걸러서, 맞는 페이지가 없거나 확신이 낮으면 LLM을 호출하지 않고 상담원 연결로 보냅니다.
+
+`app/decision.py`의 `DecisionModel` 인터페이스(`label`, `choose`, `cost`)를 구현체 셋이 구현합니다. 앱이 시작할 때 설정을 보고 하나를 골라 끝까지 씁니다.
+
+| `DECISION_PROVIDER` | 구현체 | 필요한 키 | 엔드포인트 |
+|---|---|---|---|
+| `typesafe` | `TypeSafeJev` | `TYPESAFE_API_KEY` (모델 `TYPESAFE_MODEL`, 기본 `jev-latest`) | `POST https://api.typesafe.ai/v1/systemone` |
+| `openrouter` | `OpenRouterJev` | `OPENROUTER_API_KEY` (모델 `OPENROUTER_DECISION_MODEL`, 기본 `typesafe/jev-1.13`) | `POST https://openrouter.ai/api/alpha/decisions` |
+| `azure` | `AzureDecision1` | `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY` | `POST {endpoint}/providers/microsoft/v1/systemone` |
+
+- `DECISION_PROVIDER`를 비워 두면 키가 모두 설정된 첫 구현체를 `typesafe → openrouter → azure` 순서로 고릅니다.
+- `DECISION_PROVIDER`를 지정했는데 그 키가 없으면 판단 단계를 건너뛰고(BM25 1위 사용), 이유를 상세 모달과 서버 시작 로그에 남깁니다.
+- 어떤 구현체로 떴는지는 서버 시작 로그(`판단 모델: ...`)와 화면 상단 칩, `/api/status`에서 확인할 수 있습니다.
+- 비용은 응답에 실제 청구액(`usage.cost`, OpenRouter)이 있으면 그 값을, 없으면 공개 단가($0.042/100만 입력 토큰)로 추정합니다.
+- 새 구현체를 추가하려면 `DecisionModel`을 상속해 `name`, `env`, `from_settings`, `label`, `url`, `headers`를 정의하고 `PROVIDERS`에 넣으면 됩니다.
+
+#### Microsoft-Decision-1 (Microsoft Foundry)
+
+1. [Foundry 포털](https://ai.azure.com) → 프로젝트 → **모델** → `Microsoft-Decision-1` → **배포**. 배포 유형은 **데이터 영역 표준**(사용량 기반 과금)을 고릅니다.
+   - "부족한 할당량"이 뜨면 **관리 → 할당량**에서 `모두 표시`를 켜고 확인합니다. 0이면 **할당량 요청**으로 신청합니다(Quota Type: Model Deployment, Model Type: Azure Direct Model). 승인까지 영업일 1~2일 걸리고 거절될 수 있습니다.
 2. 배포 상세 화면에서 **리소스 엔드포인트, 배포 이름, API 키**를 복사해 `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY`에 넣습니다.
 
 앱은 `POST {DECISION_ENDPOINT}/providers/microsoft/v1/systemone`을 `api-key` 헤더로 호출합니다. 자세한 내용은 [공식 문서](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision)를 참고하세요.
@@ -74,11 +140,11 @@ Claude는 두 곳에서 쓰입니다.
 ```
 질문
  │
- ├─ 1. 검색어 변환   한국어면 Claude가 영어 검색어로 변환 (영어면 건너뜀)
+ ├─ 1. 검색어 변환   한국어면 LLM이 영어 검색어로 변환 (영어면 건너뜀)
  ├─ 2. 위키 검색     BM25 키워드 검색으로 후보 페이지 8개 추림
- ├─ 3. 페이지 선택   Decision-1이 후보 + '해당 없음' 중 하나를 확률과 함께 선택
+ ├─ 3. 페이지 선택   판단 모델(Jev 또는 Decision-1)이 후보 + '해당 없음' 중 하나를 확률과 함께 선택
  └─ 4. 답변 구성     아래 중 하나
-        ├─ LLM 생성       선택 페이지(필요하면 2순위까지)를 근거로 Claude가 답변
+        ├─ LLM 생성       선택 페이지(필요하면 2순위까지)를 근거로 LLM이 답변
         ├─ 위키 답변 그대로  확률 ≥ DIRECT_ANSWER_THRESHOLD 이면 LLM 호출 없이 대표 답변 발송 (기본 꺼짐)
         └─ 상담원 연결     '해당 없음'이거나 확률 < MIN_CONFIDENCE 이면 LLM 호출 없이 연결 안내
 ```
@@ -87,8 +153,8 @@ Claude는 두 곳에서 쓰입니다.
 
 | 상황 | 동작 |
 |---|---|
-| Decision-1 키 없음 | BM25 1위 페이지를 그대로 사용합니다. **"해당 없음" 판정이 없어서 엉뚱한 질문에도 아무 페이지로 답합니다.** |
-| Claude 키 없음 | 위키 대표 답변(영어 원문)을 그대로 보여 줍니다. 한국어 질문은 검색어 변환을 못 해서 대부분 상담원 연결로 빠집니다. |
+| 판단 모델 키 없음 | BM25 1위 페이지를 그대로 사용합니다. **"해당 없음" 판정이 없어서 엉뚱한 질문에도 아무 페이지로 답합니다.** |
+| LLM 키 없음 | 위키 대표 답변(영어 원문)을 그대로 보여 줍니다. 한국어 질문은 검색어 변환을 못 해서 대부분 상담원 연결로 빠집니다. |
 | API 호출 실패 | 위 동작으로 대체하고, 모달 상단에 경고를 표시합니다. |
 
 ### 상세 모달에서 볼 수 있는 것
@@ -96,8 +162,8 @@ Claude는 두 곳에서 쓰입니다.
 - 답변 방식, 총 소요 시간, 추정 비용, 판단 근거
 - 단계별 상태(완료/건너뜀/오류), 소요 시간, 건너뛴 이유
 - 검색 후보 페이지와 BM25 점수 (제목을 누르면 위키 본문 미리보기)
-- Decision-1이 매긴 선택지별 확률
-- Claude 모델, effort, 근거 파일, 토큰 수, 비용
+- 판단 모델(Jev 또는 Decision-1)이 매긴 선택지별 확률
+- LLM 모델, effort, 근거 파일, 토큰 수, 비용
 - 답변에 실제로 사용한 위키 파일 전문
 - 원본 trace JSON
 
@@ -105,10 +171,17 @@ Claude는 두 곳에서 쓰입니다.
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
+| `LLM_PROVIDER` | `openai` | `openai` / `anthropic` |
+| `OPENAI_API_KEY` | (없음) | OpenAI API 키 |
 | `ANTHROPIC_API_KEY` | (없음) | Claude API 키 |
-| `LLM_MODEL` | `claude-opus-5-5` | 답변 생성 모델 |
+| `LLM_MODEL` | `gpt-5-mini` / `claude-opus-5-5` | 답변 생성 모델 (provider별 기본값) |
 | `LLM_EFFORT` | `medium` | `low` / `medium` / `high` / `xhigh` / `max` |
 | `REWRITE_MODEL` | `LLM_MODEL`과 같음 | 검색어 변환 모델 (항상 effort `low`) |
+| `DECISION_PROVIDER` | 자동 | `typesafe` / `openrouter` / `azure` |
+| `TYPESAFE_API_KEY` | (없음) | TypeSafe 키 (Jev 직접 호출) |
+| `TYPESAFE_MODEL` | `jev-latest` | TypeSafe 모델 ID |
+| `OPENROUTER_API_KEY` | (없음) | OpenRouter 키 (Jev) |
+| `OPENROUTER_DECISION_MODEL` | `typesafe/jev-1.13` | OpenRouter 판단 모델 ID |
 | `DECISION_ENDPOINT` | (없음) | Foundry 리소스 엔드포인트 |
 | `DECISION_DEPLOYMENT` | (없음) | Foundry 배포 이름 |
 | `DECISION_API_KEY` | (없음) | Foundry API 키 |
@@ -145,7 +218,7 @@ make wiki    # data/normalized → wiki/
 make test
 ```
 
-외부 API 대신 가짜 Claude와 가짜 Decision-1을 써서 라우팅 분기(상담원 연결, 낮은 확신, 2순위 페이지 포함, 직접 답변, API 실패 시 대체)와 HTTP API를 검증합니다.
+외부 API 대신 가짜 LLM과 가짜 판단 모델을 써서 라우팅 분기(상담원 연결, 낮은 확신, 2순위 페이지 포함, 직접 답변, API 실패 시 대체)와 HTTP API를 검증합니다.
 
 ## 구조
 
@@ -154,8 +227,8 @@ app/
   main.py       FastAPI 앱, /api/chat · /api/status · /api/wiki/{id}
   pipeline.py   검색어 변환 → 검색 → 선택 → 답변, 단계별 trace 기록
   wiki.py       위키 로딩, BM25 검색
-  decision.py   Microsoft-Decision-1 클라이언트
-  llm.py        Claude 클라이언트, 프롬프트, 비용 추정
+  decision.py   판단 모델 인터페이스(DecisionModel)와 구현체(TypeSafeJev, OpenRouterJev, AzureDecision1)
+  llm.py        OpenAI/Claude 클라이언트, 프롬프트, 비용 추정
   config.py     환경변수
 static/         채팅 UI (빌드 단계 없는 HTML/CSS/JS)
 scripts/        download.sh → normalize.py → build_wiki.py
@@ -165,8 +238,8 @@ tests/
 
 ## 한계
 
-- **위키가 영어입니다.** 한국어 질문은 Claude로 검색어를 변환해야 검색이 됩니다. 실제 서비스에서는 한국어 CS 기록으로 위키를 만들어야 합니다.
-- **sft50k 대표 답변은 특정 고객 건의 기록입니다.** "$79 환불 완료" 같은 내용이 들어 있습니다. 프롬프트로 그대로 옮기지 못하게 막아 두었지만, Claude 키 없이 원문을 보여 줄 때는 앞에 경고 문구를 붙입니다.
+- **위키가 영어입니다.** 한국어 질문은 LLM으로 검색어를 변환해야 검색이 됩니다. 실제 서비스에서는 한국어 CS 기록으로 위키를 만들어야 합니다.
+- **sft50k 대표 답변은 특정 고객 건의 기록입니다.** "$79 환불 완료" 같은 내용이 들어 있습니다. 프롬프트로 그대로 옮기지 못하게 막아 두었지만, LLM 키 없이 원문을 보여 줄 때는 앞에 경고 문구를 붙입니다.
 - **대화 맥락이 없습니다.** 질문 하나하나를 독립적으로 처리합니다.
-- **Decision-1의 확률은 이 데이터로 검증되지 않았습니다.** 2026-10-09에 출시된 모델이라, 실제 데이터로 정답률을 측정한 뒤 임계값을 정해야 합니다.
-- 추정 비용은 공개 단가 기준 계산값이며 실제 청구액과 다를 수 있습니다.
+- **판단 모델의 확률은 이 데이터로 검증되지 않았습니다.** Jev와 Decision-1 모두 최근 출시된 모델이라, 실제 데이터로 정답률을 측정한 뒤 `MIN_CONFIDENCE` 등 임계값을 정해야 합니다.
+- 비용은 응답에 실제 청구액이 오면(OpenRouter `usage.cost`) 그 값, 아니면 공개 단가 기준 추정값이며 실제 청구액과 다를 수 있습니다.
