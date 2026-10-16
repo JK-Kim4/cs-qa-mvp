@@ -11,7 +11,17 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">CS QA MVP</div>
-      <div class="status" id="status">상태 확인 중…</div>
+      <div class="topbar-right">
+        <button type="button" class="guide-btn" id="guide-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"></path><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"></path></svg>
+          <span id="guide-btn-label">데이터 가이드</span>
+        </button>
+        <div class="status" id="status">상태 확인 중…</div>
+        <label class="toggle" title="판단 모델 경로와 바이패스 경로를 함께 실행해 결과를 비교합니다">
+          <input type="checkbox" id="compare"><span class="track"></span><span>비교 모드</span>
+        </label>
+        <button type="button" class="help-btn" id="tour-btn" aria-label="사용법 안내 다시 보기" title="사용법 안내 다시 보기">?</button>
+      </div>
     </header>
 
     <main class="chat" id="chat">
@@ -36,6 +46,45 @@
         <button class="icon-btn" data-close aria-label="닫기">✕</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="guide" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel guide-panel" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="guide-title">질문할 수 있는 주제</h2>
+          <p class="guide-sub" id="guide-sub">불러오는 중…</p>
+        </div>
+        <button class="icon-btn" data-close aria-label="닫기">✕</button>
+      </div>
+      <div class="guide-tabs" id="guide-tabs" role="tablist"></div>
+      <div class="guide-main">
+        <div class="guide-list">
+          <label class="guide-search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+            <input type="search" id="guide-q" placeholder="주제 검색 (예: refund, 배송, password)" aria-label="주제 검색">
+          </label>
+          <div id="guide-groups"></div>
+        </div>
+        <aside class="guide-detail" id="guide-detail"></aside>
+      </div>
+    </div>
+  </div>
+
+  <div class="tour" id="tour" hidden>
+    <div class="tour-spot" id="tour-spot"></div>
+    <div class="tour-card" id="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+      <div class="tour-step" id="tour-step"></div>
+      <h3 id="tour-title"></h3>
+      <p id="tour-text"></p>
+      <div class="tour-actions">
+        <button type="button" class="tour-skip" id="tour-skip">건너뛰기</button>
+        <span></span>
+        <button type="button" class="tour-prev" id="tour-prev">이전</button>
+        <button type="button" class="tour-next" id="tour-next">다음</button>
+      </div>
     </div>
   </div>
 

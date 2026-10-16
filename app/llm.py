@@ -79,6 +79,9 @@ class Claude:
             raise LLMError("Claude 가 이 요청에 대한 답변을 거절했습니다.")
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+        cached = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        if cached:
+            usage["cached_input_tokens"] = cached
         return {
             "text": text,
             "model": resp.model,
@@ -140,6 +143,10 @@ class OpenAIChat:
             if not text:
                 raise LLMError(f"OpenAI 응답이 중간에 끊겼습니다 ({stop_reason}).")
         usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+        # 프롬프트 캐시 적중분. 비교 모드에서 캐시가 비용에 끼친 영향을 확인하는 용도 (비용 추정은 정가 기준)
+        cached = getattr(getattr(resp.usage, "input_tokens_details", None), "cached_tokens", 0) or 0
+        if cached:
+            usage["cached_input_tokens"] = cached
         return {
             "text": text,
             "model": resp.model,

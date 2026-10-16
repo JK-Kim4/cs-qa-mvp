@@ -6,8 +6,10 @@
   direct:   확신이 매우 높으면 위키 대표 답변을 그대로 발송 (DIRECT_ANSWER_THRESHOLD 설정 시)
   escalate: 맞는 페이지가 없거나 확신이 낮으면 상담원 연결
 """
+import copy
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .decision import NONE_KEY, DecisionError, select_decision
 from .llm import LLMError, make_llm
@@ -71,22 +73,47 @@ class Pipeline:
     def decision_label(self):
         return getattr(self.decision, "label", None) or "판단 모델"
 
-    def run(self, question):
+    def run(self, question, bypass_decision=False):
+        return self._finish(self._prepare(question), bypass_decision)
+
+    def compare(self, question):
+        """비교 모드: 검색어 변환과 검색은 한 번만 하고, 판단 모델 경로와 바이패스 경로를 동시에 실행한다.
+
+        두 경로가 같은 검색어와 후보를 쓰므로 차이는 판단 단계에서만 생긴다. 동시에 돌려서
+        한쪽이 먼저 실행되며 생기는 지연/캐시 이점도 없앤다. 각 결과의 비용·소요 시간에는
+        공통 단계도 포함되어, 각각이 단독으로 운영될 때의 값과 같다.
+        """
+        prepared = self._prepare(question)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            with_decision = pool.submit(self._finish, prepared, False)
+            bypass = pool.submit(self._finish, prepared, True)
+            return {"question": question, "with_decision": with_decision.result(), "bypass": bypass.result()}
+
+    # 검색어 변환과 검색: 비교 모드에서 두 경로가 공유한다.
+    def _prepare(self, question):
         started = time.perf_counter()
         trace = {"question": question, "steps": [], "selected_pages": [], "warnings": []}
         costs = []
-
         query = self._rewrite(question, trace, costs)
         candidates = self._search(query, trace)
-        route, reason, chosen = self._decide(question, query, candidates, trace, costs)
+        return {"trace": trace, "costs": costs, "query": query, "candidates": candidates,
+                "ms": (time.perf_counter() - started) * 1000}
+
+    def _finish(self, prepared, bypass_decision):
+        started = time.perf_counter()
+        trace, costs = copy.deepcopy(prepared["trace"]), list(prepared["costs"])
+        question, query, candidates = trace["question"], prepared["query"], prepared["candidates"]
+
+        route, reason, chosen = self._decide(question, query, candidates, trace, costs, bypass_decision)
         answer = self._answer(question, route, chosen, trace, costs)
         answer_mode = next(s for s in trace["steps"] if s["key"] == "answer")["detail"]["mode"]
 
         trace.update(
+            path="bypass" if bypass_decision else "decision",
             route=route,
             answer_mode=answer_mode,
             route_reason=reason,
-            total_ms=round((time.perf_counter() - started) * 1000),
+            total_ms=round(prepared["ms"] + (time.perf_counter() - started) * 1000),
             total_cost_usd=round(sum(costs), 6) if costs else 0.0,
         )
         return {"answer": answer, "route": route, "answer_mode": answer_mode, "trace": trace}
@@ -127,13 +154,16 @@ class Pipeline:
             return hits
 
     # 3. 판단 모델이 후보 중 하나 또는 '해당 없음'을 고른다.
-    def _decide(self, question, query, candidates, trace, costs):
-        with Step(trace, "decide", f"페이지 선택 ({self.decision_label})") as st:
+    def _decide(self, question, query, candidates, trace, costs, bypass=False):
+        title = "페이지 선택 (바이패스: BM25 1위)" if bypass else f"페이지 선택 ({self.decision_label})"
+        with Step(trace, "decide", title) as st:
             if not candidates:
                 st.update(status="skipped", reason="검색 후보가 없어 판단할 대상이 없음")
                 return "escalate", "검색 결과 없음", []
 
-            if self.decision:
+            if bypass:
+                st.update(status="skipped", reason="비교 모드 바이패스 경로: 판단 모델을 거치지 않고 BM25 1위 페이지를 사용")
+            elif self.decision:
                 try:
                     return self._decide_with_model(question, query, candidates, st, costs)
                 except DecisionError as e:

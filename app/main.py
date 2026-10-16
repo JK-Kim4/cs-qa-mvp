@@ -21,6 +21,7 @@ log.info("판단 모델: %s (%s)", _st["decision"]["label"] if _st["decision"]["
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
+    compare: bool = False  # 비교 모드: 판단 모델 경로와 바이패스 경로를 함께 실행
 
 
 @app.get("/api/status")
@@ -34,7 +35,19 @@ def chat(req: ChatRequest):
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "질문이 비어 있습니다.")
-    return pipeline.run(question)
+    return pipeline.compare(question) if req.compare else pipeline.run(question)
+
+
+@app.get("/api/guide")
+def guide():
+    """데이터셋/주제 가이드. 위키는 실행 중 바뀌지 않으므로 처음 한 번만 만든다."""
+    global _guide
+    if _guide is None:
+        _guide = pipeline.wiki.guide()
+    return _guide
+
+
+_guide = None
 
 
 @app.get("/api/wiki/{page_id:path}")

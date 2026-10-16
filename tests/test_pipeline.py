@@ -208,6 +208,21 @@ def test_failures_fall_back(settings):
     assert {s["status"] for s in out["trace"]["steps"][2:]} == {"error"}
 
 
+def test_compare_runs_both_paths_on_shared_search(settings):
+    llm, decision = FakeLLM(), FakeDecision({NONE_KEY: 0.9})
+    out = Pipeline(settings, llm=llm, decision=decision).compare("주문을 취소하고 싶어요")
+    a, b = out["with_decision"], out["bypass"]
+    # 판단 모델 경로는 '해당 없음'으로 상담원 연결, 바이패스는 BM25 1위로 LLM 답변
+    assert a["route"] == "escalate" and a["trace"]["path"] == "decision"
+    assert b["route"] == "generate" and b["answer"] == "생성된 답변" and b["trace"]["path"] == "bypass"
+    # 검색어 변환·검색은 한 번만 하고 같은 결과를 공유한다
+    assert a["trace"]["steps"][:2] == b["trace"]["steps"][:2]
+    assert b["trace"]["steps"][2]["status"] == "skipped" and "바이패스" in b["trace"]["steps"][2]["title"]
+    # 각 경로 비용에는 공통 단계(검색어 변환 $0.001)가 포함된다
+    assert a["trace"]["total_cost_usd"] == round(0.001 + 0.00004, 6)
+    assert b["trace"]["total_cost_usd"] == round(0.001 + 0.001, 6)
+
+
 def test_http_api(settings):
     from app.main import app
 
@@ -219,3 +234,9 @@ def test_http_api(settings):
     assert client.get(f"/api/wiki/{page_id}").status_code == 200
     assert client.get("/").status_code == 200
     assert client.post("/api/chat", json={"question": ""}).status_code == 422
+    g = client.get("/api/guide").json()
+    assert g["total"]["pages"] == 87 and g["total"]["datasets"] == 3
+    topics = [t for d in g["datasets"] for grp in d["groups"] for t in grp["topics"]]
+    assert len(topics) == 87 and all(t["examples"] and "{{" not in t["answer"] for t in topics)
+    cmp = client.post("/api/chat", json={"question": "refund please", "compare": True}).json()
+    assert cmp["with_decision"]["trace"]["steps"] and cmp["bypass"]["trace"]["path"] == "bypass"
