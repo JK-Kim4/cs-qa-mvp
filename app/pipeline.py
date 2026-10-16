@@ -2,7 +2,7 @@
 
 검색어 변환 -> BM25 검색 -> Decision-1 선택 -> 라우팅 -> 답변 생성
 라우팅 결과는 셋 중 하나다.
-  generate: 선택된 위키 페이지를 근거로 Claude 가 답변 생성
+  generate: 선택된 위키 페이지를 근거로 LLM(OpenAI 또는 Claude) 이 답변 생성
   direct:   확신이 매우 높으면 위키 대표 답변을 그대로 발송 (DIRECT_ANSWER_THRESHOLD 설정 시)
   escalate: 맞는 페이지가 없거나 확신이 낮으면 상담원 연결
 """
@@ -10,7 +10,7 @@ import re
 import time
 
 from .decision import NONE_KEY, DecisionClient, DecisionError
-from .llm import Claude, LLMError
+from .llm import LLMError, make_llm
 from .wiki import Wiki
 
 CANNED_PREFIX = "[LLM 미사용: 위키 대표 답변 원문입니다. 과거 특정 고객 건의 기록일 수 있습니다]\n\n"
@@ -43,12 +43,10 @@ class Step:
 
 
 class Pipeline:
-    def __init__(self, settings, wiki=None, claude=None, decision=None):
+    def __init__(self, settings, wiki=None, llm=None, decision=None):
         self.s = settings
         self.wiki = wiki or Wiki(settings.wiki_dir)
-        self.claude = claude
-        if self.claude is None and settings.llm_enabled:
-            self.claude = Claude(settings.anthropic_api_key, settings.llm_model, settings.llm_effort, settings.rewrite_model)
+        self.llm = llm if llm is not None else make_llm(settings)
         self.decision = decision
         if self.decision is None and settings.decision_enabled:
             self.decision = DecisionClient(settings.decision_endpoint, settings.decision_deployment, settings.decision_api_key)
@@ -56,7 +54,11 @@ class Pipeline:
     def status(self):
         return {
             "pages": len(self.wiki.pages),
-            "llm": {"enabled": self.claude is not None, "model": self.s.llm_model if self.claude else None},
+            "llm": {
+                "enabled": self.llm is not None,
+                "provider": self.s.llm_provider,
+                "model": self.s.llm_model if self.llm else None,
+            },
             "decision": {"enabled": self.decision is not None},
         }
 
@@ -86,12 +88,12 @@ class Pipeline:
             if not HANGUL.search(question):
                 st.update(status="skipped", reason="영어 질문이라 원문을 그대로 검색어로 사용")
                 return question
-            if not self.claude:
-                st.update(status="skipped", reason="ANTHROPIC_API_KEY 미설정. 한국어 원문으로 검색하면 영어 위키와 거의 매칭되지 않습니다.")
+            if not self.llm:
+                st.update(status="skipped", reason=f"{self.s.llm_key_name} 미설정. 한국어 원문으로 검색하면 영어 위키와 거의 매칭되지 않습니다.")
                 trace["warnings"].append("한국어 질문인데 LLM 키가 없어 검색어 변환을 건너뜀")
                 return question
             try:
-                r = self.claude.rewrite_query(question)
+                r = self.llm.rewrite_query(question)
             except LLMError as e:
                 st.update(status="error", reason=str(e))
                 return question
@@ -198,12 +200,12 @@ class Pipeline:
                 st.update(reason="위키 대표 답변을 그대로 사용. LLM 을 호출하지 않음")
                 st["detail"] = {"mode": "direct", "source": bodies[0][0]}
                 return canned_answer(bodies[0][1])
-            if not self.claude:
-                st.update(status="skipped", reason="ANTHROPIC_API_KEY 미설정 -> 위키 대표 답변(영어)을 그대로 표시")
+            if not self.llm:
+                st.update(status="skipped", reason=f"{self.s.llm_key_name} 미설정 -> 위키 대표 답변(영어)을 그대로 표시")
                 st["detail"] = {"mode": "canned", "source": bodies[0][0]}
                 return CANNED_PREFIX + canned_answer(bodies[0][1])
             try:
-                r = self.claude.answer(question, bodies)
+                r = self.llm.answer(question, bodies)
             except LLMError as e:
                 st.update(status="error", reason=f"{e} -> 위키 대표 답변으로 대체")
                 st["detail"] = {"mode": "canned", "source": bodies[0][0]}

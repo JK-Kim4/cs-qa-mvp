@@ -1,4 +1,4 @@
-"""외부 API 없이 파이프라인 라우팅을 검증한다. Claude/Decision-1 은 가짜 객체로 바꾼다."""
+"""외부 API 없이 파이프라인 라우팅을 검증한다. LLM/Decision-1 은 가짜 객체로 바꾼다."""
 from dataclasses import replace
 
 import pytest
@@ -6,11 +6,11 @@ from fastapi.testclient import TestClient
 
 from app.config import load_settings
 from app.decision import NONE_KEY, DecisionError
-from app.llm import LLMError
+from app.llm import Claude, LLMError, OpenAIChat, make_llm
 from app.pipeline import ESCALATE_MESSAGE, Pipeline
 
 
-class FakeClaude:
+class FakeLLM:
     def __init__(self, fail=False):
         self.fail = fail
         self.answered_with = None
@@ -48,9 +48,49 @@ class FakeDecision:
 
 @pytest.fixture
 def settings(monkeypatch):
-    for k in ("ANTHROPIC_API_KEY", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD"):
+    for k in ("LLM_PROVIDER", "LLM_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD"):
         monkeypatch.setenv(k, "")
     return load_settings()
+
+
+def test_provider_selection(settings, monkeypatch):
+    assert settings.llm_provider == "openai" and settings.llm_model == "gpt-5-mini"
+    assert make_llm(settings) is None
+    assert isinstance(make_llm(replace(settings, openai_api_key="sk-test")), OpenAIChat)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    s = load_settings()
+    assert s.llm_model == "claude-opus-5-5" and s.llm_key_name == "ANTHROPIC_API_KEY"
+    assert isinstance(make_llm(s), Claude)
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    with pytest.raises(ValueError):
+        load_settings()
+
+
+def test_openai_response_parsing():
+    from types import SimpleNamespace as NS
+
+    def resp(content, status="completed", reason=None):
+        return NS(output=[NS(type="reasoning"), NS(type="message", content=content)],
+                  output_text="".join(c.text for c in content if c.type == "output_text"),
+                  status=status, incomplete_details=NS(reason=reason) if reason else None,
+                  model="gpt-5-mini-2025-08-07", usage=NS(input_tokens=1000, output_tokens=100))
+
+    llm = OpenAIChat("sk-test", "gpt-5-mini", "medium", "gpt-5-mini")
+    calls = []
+    llm.client = NS(responses=NS(create=lambda **kw: calls.append(kw) or queue.pop(0)))
+    queue = [resp([NS(type="output_text", text=" cancel order ")]),
+             resp([NS(type="refusal", refusal="no")]),
+             resp([], status="incomplete", reason="max_output_tokens")]
+
+    r = llm.rewrite_query("주문 취소")
+    assert r["text"] == "cancel order" and r["stop_reason"] == "completed"
+    assert r["cost_usd"] == round(1000 / 1e6 * 0.25 + 100 / 1e6 * 2.0, 6)
+    assert calls[0]["reasoning"] == {"effort": "low"} and calls[0]["model"] == "gpt-5-mini"
+    with pytest.raises(LLMError, match="거절"):
+        llm.answer("q", [("wiki/a.md", "body")])
+    with pytest.raises(LLMError, match="max_output_tokens"):
+        llm.answer("q", [("wiki/a.md", "body")])
 
 
 def test_no_keys_uses_bm25_top_and_canned_answer(settings):
@@ -69,48 +109,48 @@ def test_korean_without_llm_warns(settings):
 
 
 def test_korean_is_rewritten_then_generated(settings):
-    claude = FakeClaude()
-    out = Pipeline(settings, claude=claude).run("주문을 취소하고 싶어요")
+    llm = FakeLLM()
+    out = Pipeline(settings, llm=llm).run("주문을 취소하고 싶어요")
     rewrite = out["trace"]["steps"][0]
     assert rewrite["detail"]["query"] == "cancel order"
     assert out["answer"] == "생성된 답변"
-    assert claude.answered_with[0] == "wiki/bitext/order/cancel-order.md"
+    assert llm.answered_with[0] == "wiki/bitext/order/cancel-order.md"
 
 
 def test_decision_none_escalates_without_llm_call(settings):
-    claude = FakeClaude()
-    out = Pipeline(settings, claude=claude, decision=FakeDecision({NONE_KEY: 0.9})).run("what is the weather today")
+    llm = FakeLLM()
+    out = Pipeline(settings, llm=llm, decision=FakeDecision({NONE_KEY: 0.9})).run("what is the weather today")
     assert out["route"] == "escalate"
     assert out["answer"] == ESCALATE_MESSAGE
-    assert claude.answered_with is None
+    assert llm.answered_with is None
 
 
 def test_low_confidence_escalates(settings):
-    out = Pipeline(settings, claude=FakeClaude(), decision=FakeDecision({"p1": 0.4, "p2": 0.35})).run("cancel my order")
+    out = Pipeline(settings, llm=FakeLLM(), decision=FakeDecision({"p1": 0.4, "p2": 0.35})).run("cancel my order")
     assert out["route"] == "escalate"
 
 
 def test_decision_choice_and_second_page(settings):
-    claude = FakeClaude()
-    out = Pipeline(settings, claude=claude, decision=FakeDecision({"p2": 0.7, "p1": 0.25})).run("cancel my order")
+    llm = FakeLLM()
+    out = Pipeline(settings, llm=llm, decision=FakeDecision({"p2": 0.7, "p1": 0.25})).run("cancel my order")
     t = out["trace"]
     cands = t["steps"][1]["detail"]["candidates"]
     assert out["route"] == "generate"
     assert [p["id"] for p in t["selected_pages"]] == [cands[1]["id"], cands[0]["id"]]
-    assert len(claude.answered_with) == 2
+    assert len(llm.answered_with) == 2
 
 
 def test_direct_route_skips_llm(settings):
     s = replace(settings, direct_threshold=0.9)
-    claude = FakeClaude()
-    out = Pipeline(s, claude=claude, decision=FakeDecision({"p1": 0.95})).run("cancel my order")
+    llm = FakeLLM()
+    out = Pipeline(s, llm=llm, decision=FakeDecision({"p1": 0.95})).run("cancel my order")
     assert out["route"] == "direct"
-    assert claude.answered_with is None
+    assert llm.answered_with is None
     assert "## " not in out["answer"]
 
 
 def test_failures_fall_back(settings):
-    out = Pipeline(settings, claude=FakeClaude(fail=True), decision=FakeDecision(error=True)).run("cancel my order")
+    out = Pipeline(settings, llm=FakeLLM(fail=True), decision=FakeDecision(error=True)).run("cancel my order")
     assert out["route"] == "generate"
     assert len(out["trace"]["warnings"]) == 2
     assert {s["status"] for s in out["trace"]["steps"][2:]} == {"error"}
