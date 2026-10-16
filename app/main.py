@@ -12,6 +12,16 @@ settings = load_settings()
 pipeline = Pipeline(settings)
 app = FastAPI(title="CS QA MVP")
 
+
+# Cache-Control 이 없으면 브라우저가 CSS/JS 를 임의로 캐시해, 배포 후 새 HTML 과 옛 CSS/JS 가 섞여 화면이 깨진다.
+# no-cache 는 매번 서버에 확인(ETag)하게 하고, 바뀌지 않았으면 304 로 본문 없이 끝난다.
+@app.middleware("http")
+async def revalidate_ui(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # 시작할 때 어떤 구현체로 떴는지 서버 로그에 남긴다.
 _st = pipeline.status()
 log = logging.getLogger("uvicorn.error")

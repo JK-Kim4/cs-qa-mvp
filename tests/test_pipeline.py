@@ -233,6 +233,8 @@ def test_http_api(settings):
     page_id = r.json()["trace"]["selected_pages"][0]["id"]
     assert client.get(f"/api/wiki/{page_id}").status_code == 200
     assert client.get("/").status_code == 200
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
     assert client.post("/api/chat", json={"question": ""}).status_code == 422
     g = client.get("/api/guide").json()
     assert g["total"]["pages"] == 87 and g["total"]["datasets"] == 3
