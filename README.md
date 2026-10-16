@@ -69,7 +69,19 @@ LLM은 두 곳에서 쓰입니다.
 
 Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 권장 모델로 자동 재시도하도록 `fallbacks: "default"`를 켜 두었습니다(`server-side-fallback-2026-07-01` 베타).
 
-### Microsoft-Decision-1 (Microsoft Foundry)
+### 판단 모델: TypeSafe Jev (OpenRouter) 또는 Microsoft-Decision-1
+
+검색 후보 중 어느 페이지로 답할지(또는 '해당 없음')를 텍스트 생성 없이 선택지별 확률로 고르는 System One 모델입니다. 두 provider 중 하나를 씁니다.
+
+| `DECISION_PROVIDER` | 필요한 값 | 비고 |
+|---|---|---|
+| `openrouter` | `OPENROUTER_API_KEY`, `DECISION_MODEL`(기본 `typesafe/jev-1.13`) | [OpenRouter](https://openrouter.ai/keys)에서 키만 만들면 대기 없이 사용 |
+| `azure` | `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY` | Foundry 할당량 승인 필요 |
+
+`DECISION_PROVIDER`를 비워 두면 `OPENROUTER_API_KEY`가 있을 때 Jev, 없으면 Decision-1을 씁니다. Jev는 `POST https://openrouter.ai/api/alpha/decisions`를 Bearer 토큰으로 호출하고, 응답의 `usage.cost`가 있으면 그 실제 청구액을 비용으로 기록합니다.
+
+#### Microsoft-Decision-1 (Microsoft Foundry)
+
 
 1. [Foundry 포털](https://ai.azure.com) → 프로젝트 → **Model catalog** → `Microsoft-Decision-1` → **Deploy**
 2. 배포 상세 화면에서 **리소스 엔드포인트, 배포 이름, API 키**를 복사해 `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY`에 넣습니다.
@@ -103,7 +115,7 @@ Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 �
 - 답변 방식, 총 소요 시간, 추정 비용, 판단 근거
 - 단계별 상태(완료/건너뜀/오류), 소요 시간, 건너뛴 이유
 - 검색 후보 페이지와 BM25 점수 (제목을 누르면 위키 본문 미리보기)
-- Decision-1이 매긴 선택지별 확률
+- 판단 모델(Jev 또는 Decision-1)이 매긴 선택지별 확률
 - LLM 모델, effort, 근거 파일, 토큰 수, 비용
 - 답변에 실제로 사용한 위키 파일 전문
 - 원본 trace JSON
@@ -118,6 +130,9 @@ Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 �
 | `LLM_MODEL` | `gpt-5-mini` / `claude-opus-5-5` | 답변 생성 모델 (provider별 기본값) |
 | `LLM_EFFORT` | `medium` | `low` / `medium` / `high` / `xhigh` / `max` |
 | `REWRITE_MODEL` | `LLM_MODEL`과 같음 | 검색어 변환 모델 (항상 effort `low`) |
+| `DECISION_PROVIDER` | 자동 | `openrouter`(Jev) / `azure`(Decision-1) |
+| `OPENROUTER_API_KEY` | (없음) | OpenRouter 키 (Jev) |
+| `DECISION_MODEL` | `typesafe/jev-1.13` | OpenRouter 판단 모델 ID |
 | `DECISION_ENDPOINT` | (없음) | Foundry 리소스 엔드포인트 |
 | `DECISION_DEPLOYMENT` | (없음) | Foundry 배포 이름 |
 | `DECISION_API_KEY` | (없음) | Foundry API 키 |

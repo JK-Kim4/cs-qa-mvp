@@ -1,6 +1,6 @@
 """질문 하나를 처리하는 파이프라인. 각 단계의 입력, 판단, 소요 시간을 trace 로 남긴다.
 
-검색어 변환 -> BM25 검색 -> Decision-1 선택 -> 라우팅 -> 답변 생성
+검색어 변환 -> BM25 검색 -> 판단 모델(Jev 또는 Decision-1) 선택 -> 라우팅 -> 답변 생성
 라우팅 결과는 셋 중 하나다.
   generate: 선택된 위키 페이지를 근거로 LLM(OpenAI 또는 Claude) 이 답변 생성
   direct:   확신이 매우 높으면 위키 대표 답변을 그대로 발송 (DIRECT_ANSWER_THRESHOLD 설정 시)
@@ -9,13 +9,13 @@
 import re
 import time
 
-from .decision import NONE_KEY, DecisionClient, DecisionError
+from .decision import NONE_KEY, DecisionError, make_decision
 from .llm import LLMError, make_llm
 from .wiki import Wiki
 
 CANNED_PREFIX = "[LLM 미사용: 위키 대표 답변 원문입니다. 과거 특정 고객 건의 기록일 수 있습니다]\n\n"
 ESCALATE_MESSAGE = "문의하신 내용은 정확한 안내를 위해 담당 상담원에게 연결해 드릴게요. 잠시만 기다려 주세요."
-DECISION_PRICE_PER_M = 0.042  # USD / 100만 입력 토큰, 출력은 무료
+DECISION_PRICE_PER_M = 0.042  # USD / 100만 입력 토큰, 출력은 무료 (Jev, Decision-1 공통 공개 단가)
 HANGUL = re.compile(r"[가-힣]")
 
 
@@ -47,9 +47,7 @@ class Pipeline:
         self.s = settings
         self.wiki = wiki or Wiki(settings.wiki_dir)
         self.llm = llm if llm is not None else make_llm(settings)
-        self.decision = decision
-        if self.decision is None and settings.decision_enabled:
-            self.decision = DecisionClient(settings.decision_endpoint, settings.decision_deployment, settings.decision_api_key)
+        self.decision = decision if decision is not None else make_decision(settings)
 
     def status(self):
         return {
@@ -59,7 +57,7 @@ class Pipeline:
                 "provider": self.s.llm_provider,
                 "model": self.s.llm_model if self.llm else None,
             },
-            "decision": {"enabled": self.decision is not None},
+            "decision": {"enabled": self.decision is not None, "label": self.s.decision_label},
         }
 
     def run(self, question):
@@ -117,9 +115,9 @@ class Pipeline:
                 st["reason"] = "일치하는 키워드가 있는 페이지가 없음"
             return hits
 
-    # 3. Decision-1 이 후보 중 하나 또는 '해당 없음'을 고른다.
+    # 3. 판단 모델이 후보 중 하나 또는 '해당 없음'을 고른다.
     def _decide(self, question, query, candidates, trace, costs):
-        with Step(trace, "decide", "페이지 선택 (Decision-1)") as st:
+        with Step(trace, "decide", f"페이지 선택 ({self.s.decision_label})") as st:
             if not candidates:
                 st.update(status="skipped", reason="검색 후보가 없어 판단할 대상이 없음")
                 return "escalate", "검색 결과 없음", []
@@ -129,9 +127,9 @@ class Pipeline:
                     return self._decide_with_model(question, query, candidates, st, costs)
                 except DecisionError as e:
                     st.update(status="error", reason=f"{e} -> BM25 1위로 대체")
-                    trace["warnings"].append("Decision-1 호출 실패로 BM25 1위 페이지를 사용")
+                    trace["warnings"].append(f"{self.s.decision_label} 호출 실패로 BM25 1위 페이지를 사용")
             else:
-                st.update(status="skipped", reason="Decision-1 미설정 -> BM25 1위 페이지를 사용 (확률 기반 상담원 연결 판단 없음)")
+                st.update(status="skipped", reason="판단 모델 미설정 (OPENROUTER_API_KEY 또는 DECISION_*) -> BM25 1위 페이지를 사용 (확률 기반 상담원 연결 판단 없음)")
 
             top = candidates[0][0]
             st["detail"]["chosen"] = {"id": top.id, "path": f"wiki/{top.path}", "by": "bm25"}
@@ -153,7 +151,9 @@ class Pipeline:
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
         usage = payload.get("usage") or {}
         in_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        cost = round(in_tokens / 1e6 * DECISION_PRICE_PER_M, 8)
+        # OpenRouter 는 실제 청구액을 usage.cost 로 준다. 없으면 공개 단가로 추정한다.
+        billed = usage.get("cost")
+        cost = round(float(billed), 8) if billed is not None else round(in_tokens / 1e6 * DECISION_PRICE_PER_M, 8)
         costs.append(cost)
         st["detail"] = {
             "options": [
@@ -170,7 +170,7 @@ class Pipeline:
 
         p_top = probs.get(choice, 0.0)
         if choice == NONE_KEY:
-            return "escalate", f"Decision-1 이 '해당 없음'을 선택 (p={p_top:.2f})", []
+            return "escalate", f"{self.s.decision_label} 이 '해당 없음'을 선택 (p={p_top:.2f})", []
         if p_top < self.s.min_confidence:
             return "escalate", f"최고 확률 {p_top:.2f} < MIN_CONFIDENCE {self.s.min_confidence}", []
 
@@ -180,10 +180,10 @@ class Pipeline:
             if k != choice and k in keys and v >= self.s.second_page_min:
                 chosen.append(keys[k])
                 break
-        st["detail"]["chosen"] = [{"id": p.id, "path": f"wiki/{p.path}", "by": "decision-1"} for p in chosen]
+        st["detail"]["chosen"] = [{"id": p.id, "path": f"wiki/{p.path}", "by": self.s.decision_label} for p in chosen]
         if self.s.direct_threshold is not None and p_top >= self.s.direct_threshold:
             return "direct", f"확률 {p_top:.2f} >= DIRECT_ANSWER_THRESHOLD {self.s.direct_threshold}", chosen[:1]
-        return "generate", f"Decision-1 선택 확률 {p_top:.2f} >= MIN_CONFIDENCE {self.s.min_confidence}", chosen
+        return "generate", f"{self.s.decision_label} 선택 확률 {p_top:.2f} >= MIN_CONFIDENCE {self.s.min_confidence}", chosen
 
     # 4. 라우팅 결과에 따라 답변을 만든다.
     def _answer(self, question, route, chosen, trace, costs):

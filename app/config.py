@@ -34,7 +34,10 @@ class Settings:
     llm_model: str
     llm_effort: str
     rewrite_model: str
-    # Microsoft-Decision-1 (Microsoft Foundry)
+    # 판단 모델 (openrouter: TypeSafe Jev | azure: Microsoft-Decision-1)
+    decision_provider: str
+    decision_model: str
+    openrouter_api_key: str | None
     decision_endpoint: str | None
     decision_deployment: str | None
     decision_api_key: str | None
@@ -58,7 +61,13 @@ class Settings:
 
     @property
     def decision_enabled(self):
+        if self.decision_provider == "openrouter":
+            return bool(self.openrouter_api_key)
         return bool(self.decision_endpoint and self.decision_deployment and self.decision_api_key)
+
+    @property
+    def decision_label(self):
+        return f"Jev ({self.decision_model})" if self.decision_provider == "openrouter" else "Decision-1"
 
 
 def load_settings():
@@ -67,6 +76,11 @@ def load_settings():
     if provider not in DEFAULT_MODELS:
         raise ValueError(f"LLM_PROVIDER 는 {' 또는 '.join(DEFAULT_MODELS)} 여야 합니다: {provider}")
     llm_model = os.getenv("LLM_MODEL") or DEFAULT_MODELS[provider]
+    openrouter_key = os.getenv("OPENROUTER_API_KEY") or None
+    # 명시하지 않으면 OpenRouter 키가 있을 때 Jev, 없으면 Azure Decision-1 을 쓴다.
+    decision_provider = (os.getenv("DECISION_PROVIDER") or ("openrouter" if openrouter_key else "azure")).lower()
+    if decision_provider not in ("openrouter", "azure"):
+        raise ValueError(f"DECISION_PROVIDER 는 openrouter 또는 azure 여야 합니다: {decision_provider}")
     return Settings(
         wiki_dir=Path(os.getenv("WIKI_DIR", ROOT / "wiki")),
         llm_provider=provider,
@@ -75,6 +89,9 @@ def load_settings():
         llm_model=llm_model,
         llm_effort=os.getenv("LLM_EFFORT", "medium"),
         rewrite_model=os.getenv("REWRITE_MODEL") or llm_model,
+        decision_provider=decision_provider,
+        decision_model=os.getenv("DECISION_MODEL") or "typesafe/jev-1.13",
+        openrouter_api_key=openrouter_key,
         decision_endpoint=(os.getenv("DECISION_ENDPOINT") or "").rstrip("/") or None,
         decision_deployment=os.getenv("DECISION_DEPLOYMENT") or None,
         decision_api_key=os.getenv("DECISION_API_KEY") or None,
