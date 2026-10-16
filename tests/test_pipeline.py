@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import load_settings
-from app.decision import NONE_KEY, OPENROUTER_URL, DecisionError, _parse_answer, make_decision
+from app.decision import NONE_KEY, AzureDecision1, DecisionError, OpenRouterJev, TypeSafeJev, parse_answer, select_decision
 from app.llm import Claude, LLMError, OpenAIChat, make_llm
 from app.pipeline import ESCALATE_MESSAGE, Pipeline
 
@@ -32,6 +32,12 @@ class FakeLLM:
 class FakeDecision:
     """probs 를 후보 키(p1..pK, none) 기준으로 돌려준다."""
 
+    name = "fake"
+    label = "FakeDecision"
+
+    def cost(self, usage):
+        return 0.00004
+
     def __init__(self, probs=None, error=False):
         self.probs = probs
         self.error = error
@@ -48,7 +54,7 @@ class FakeDecision:
 
 @pytest.fixture
 def settings(monkeypatch):
-    for k in ("LLM_PROVIDER", "LLM_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "DECISION_PROVIDER", "DECISION_MODEL", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD"):
+    for k in ("LLM_PROVIDER", "LLM_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "DECISION_PROVIDER", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD"):
         monkeypatch.setenv(k, "")
     return load_settings()
 
@@ -94,25 +100,49 @@ def test_openai_response_parsing():
 
 
 def test_decision_provider_selection(settings, monkeypatch):
-    assert make_decision(settings) is None
+    d, reason = select_decision(settings)
+    assert d is None and "미설정" in reason
+
+    # 키가 하나만 있으면 그 구현체를 자동 선택
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-    s = load_settings()
-    assert s.decision_provider == "openrouter" and s.decision_model == "typesafe/jev-1.13"
-    d = make_decision(s)
-    assert d.url == OPENROUTER_URL and d.headers["Authorization"] == "Bearer sk-or-test"
-    monkeypatch.setenv("DECISION_PROVIDER", "azure")
+    d, _ = select_decision(load_settings())
+    assert isinstance(d, OpenRouterJev) and d.model == "typesafe/jev-1.13"
+    assert d.url == "https://openrouter.ai/api/alpha/decisions" and d.headers() == {"Authorization": "Bearer sk-or-test"}
+
+    # 여러 개면 typesafe > openrouter > azure 순
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test")
     for k, v in {"DECISION_ENDPOINT": "https://x.services.ai.azure.com/", "DECISION_DEPLOYMENT": "Decision-1",
                  "DECISION_API_KEY": "k"}.items():
         monkeypatch.setenv(k, v)
-    d = make_decision(load_settings())
-    assert d.url == "https://x.services.ai.azure.com/providers/microsoft/v1/systemone" and d.headers["api-key"] == "k"
+    d, _ = select_decision(load_settings())
+    assert isinstance(d, TypeSafeJev) and d.url == "https://api.typesafe.ai/v1/systemone" and d.model == "jev-latest"
+
+    # DECISION_PROVIDER 로 명시하면 그 구현체
+    monkeypatch.setenv("DECISION_PROVIDER", "azure")
+    d, _ = select_decision(load_settings())
+    assert isinstance(d, AzureDecision1)
+    assert d.url == "https://x.services.ai.azure.com/providers/microsoft/v1/systemone" and d.headers() == {"api-key": "k"}
+
+    # 명시했는데 키가 없으면 비활성 + 이유
+    monkeypatch.setenv("DECISION_API_KEY", "")
+    d, reason = select_decision(load_settings())
+    assert d is None and "DECISION_API_KEY" in reason
+
+    monkeypatch.setenv("DECISION_PROVIDER", "jev")
+    with pytest.raises(ValueError):
+        load_settings()
+
+
+def test_decision_cost():
+    d = OpenRouterJev("k", "typesafe/jev-1.13")
+    assert d.cost({"prompt_tokens": 1_000_000}) == 0.042
+    assert d.cost({"prompt_tokens": 1000, "cost": 0.00005}) == 0.00005
 
 
 def test_parse_answer_shapes():
-    criteria = {"p1": "", "p2": "", "none": ""}
-    assert _parse_answer({"choice": "p1", "probabilities": {"p1": 0.8, "p2": 0.2}}, criteria) == ("p1", {"p1": 0.8, "p2": 0.2})
-    assert _parse_answer({"probabilities": {"p1": 0.3, "p2": 0.7}}, criteria)[0] == "p2"
-    assert _parse_answer([{"scores": [{"option": "none", "score": 0.9}, {"option": "p1", "score": 0.1}]}], criteria)[0] == "none"
+    assert parse_answer({"choice": "p1", "probabilities": {"p1": 0.8, "p2": 0.2}}) == ("p1", {"p1": 0.8, "p2": 0.2})
+    assert parse_answer({"probabilities": {"p1": 0.3, "p2": 0.7}})[0] == "p2"
+    assert parse_answer([{"scores": [{"option": "none", "score": 0.9}, {"option": "p1", "score": 0.1}]}])[0] == "none"
 
 
 def test_no_keys_uses_bm25_top_and_canned_answer(settings):

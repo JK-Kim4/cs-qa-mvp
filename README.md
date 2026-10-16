@@ -69,16 +69,23 @@ LLM은 두 곳에서 쓰입니다.
 
 Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 권장 모델로 자동 재시도하도록 `fallbacks: "default"`를 켜 두었습니다(`server-side-fallback-2026-07-01` 베타).
 
-### 판단 모델: TypeSafe Jev (OpenRouter) 또는 Microsoft-Decision-1
+### 판단 모델 (System One): TypeSafe Jev 또는 Microsoft-Decision-1
 
-검색 후보 중 어느 페이지로 답할지(또는 '해당 없음')를 텍스트 생성 없이 선택지별 확률로 고르는 System One 모델입니다. 두 provider 중 하나를 씁니다.
+검색 후보 중 어느 페이지로 답할지(또는 '해당 없음')를 텍스트 생성 없이 선택지별 확률로 고르는 단계입니다. LLM 앞단에서 이 단계가 질문을 걸러서, 맞는 페이지가 없거나 확신이 낮으면 LLM을 호출하지 않고 상담원 연결로 보냅니다.
 
-| `DECISION_PROVIDER` | 필요한 값 | 비고 |
-|---|---|---|
-| `openrouter` | `OPENROUTER_API_KEY`, `DECISION_MODEL`(기본 `typesafe/jev-1.13`) | [OpenRouter](https://openrouter.ai/keys)에서 키만 만들면 대기 없이 사용 |
-| `azure` | `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY` | Foundry 할당량 승인 필요 |
+`app/decision.py`의 `DecisionModel` 인터페이스(`label`, `choose`, `cost`)를 구현체 셋이 구현합니다. 앱이 시작할 때 설정을 보고 하나를 골라 끝까지 씁니다.
 
-`DECISION_PROVIDER`를 비워 두면 `OPENROUTER_API_KEY`가 있을 때 Jev, 없으면 Decision-1을 씁니다. Jev는 `POST https://openrouter.ai/api/alpha/decisions`를 Bearer 토큰으로 호출하고, 응답의 `usage.cost`가 있으면 그 실제 청구액을 비용으로 기록합니다.
+| `DECISION_PROVIDER` | 구현체 | 필요한 키 | 엔드포인트 |
+|---|---|---|---|
+| `typesafe` | `TypeSafeJev` | `TYPESAFE_API_KEY` (모델 `TYPESAFE_MODEL`, 기본 `jev-latest`) | `POST https://api.typesafe.ai/v1/systemone` |
+| `openrouter` | `OpenRouterJev` | `OPENROUTER_API_KEY` (모델 `OPENROUTER_DECISION_MODEL`, 기본 `typesafe/jev-1.13`) | `POST https://openrouter.ai/api/alpha/decisions` |
+| `azure` | `AzureDecision1` | `DECISION_ENDPOINT`, `DECISION_DEPLOYMENT`, `DECISION_API_KEY` | `POST {endpoint}/providers/microsoft/v1/systemone` |
+
+- `DECISION_PROVIDER`를 비워 두면 키가 모두 설정된 첫 구현체를 `typesafe → openrouter → azure` 순서로 고릅니다.
+- `DECISION_PROVIDER`를 지정했는데 그 키가 없으면 판단 단계를 건너뛰고(BM25 1위 사용), 이유를 상세 모달과 서버 시작 로그에 남깁니다.
+- 어떤 구현체로 떴는지는 서버 시작 로그(`판단 모델: ...`)와 화면 상단 칩, `/api/status`에서 확인할 수 있습니다.
+- 비용은 응답에 실제 청구액(`usage.cost`, OpenRouter)이 있으면 그 값을, 없으면 공개 단가($0.042/100만 입력 토큰)로 추정합니다.
+- 새 구현체를 추가하려면 `DecisionModel`을 상속해 `name`, `env`, `from_settings`, `label`, `url`, `headers`를 정의하고 `PROVIDERS`에 넣으면 됩니다.
 
 #### Microsoft-Decision-1 (Microsoft Foundry)
 
@@ -130,9 +137,11 @@ Claude provider에서는 안전 분류기가 요청을 거절하면 서버가 �
 | `LLM_MODEL` | `gpt-5-mini` / `claude-opus-5-5` | 답변 생성 모델 (provider별 기본값) |
 | `LLM_EFFORT` | `medium` | `low` / `medium` / `high` / `xhigh` / `max` |
 | `REWRITE_MODEL` | `LLM_MODEL`과 같음 | 검색어 변환 모델 (항상 effort `low`) |
-| `DECISION_PROVIDER` | 자동 | `openrouter`(Jev) / `azure`(Decision-1) |
+| `DECISION_PROVIDER` | 자동 | `typesafe` / `openrouter` / `azure` |
+| `TYPESAFE_API_KEY` | (없음) | TypeSafe 키 (Jev 직접 호출) |
+| `TYPESAFE_MODEL` | `jev-latest` | TypeSafe 모델 ID |
 | `OPENROUTER_API_KEY` | (없음) | OpenRouter 키 (Jev) |
-| `DECISION_MODEL` | `typesafe/jev-1.13` | OpenRouter 판단 모델 ID |
+| `OPENROUTER_DECISION_MODEL` | `typesafe/jev-1.13` | OpenRouter 판단 모델 ID |
 | `DECISION_ENDPOINT` | (없음) | Foundry 리소스 엔드포인트 |
 | `DECISION_DEPLOYMENT` | (없음) | Foundry 배포 이름 |
 | `DECISION_API_KEY` | (없음) | Foundry API 키 |

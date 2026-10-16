@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +11,12 @@ from .pipeline import Pipeline
 settings = load_settings()
 pipeline = Pipeline(settings)
 app = FastAPI(title="CS QA MVP")
+
+# 시작할 때 어떤 구현체로 떴는지 서버 로그에 남긴다.
+_st = pipeline.status()
+log = logging.getLogger("uvicorn.error")
+log.info("LLM: %s", f"{settings.llm_provider} / {settings.llm_model}" if _st["llm"]["enabled"] else f"미설정 ({settings.llm_key_name} 없음)")
+log.info("판단 모델: %s (%s)", _st["decision"]["label"] if _st["decision"]["enabled"] else "미설정", _st["decision"]["reason"])
 
 
 class ChatRequest(BaseModel):
