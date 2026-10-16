@@ -11,7 +11,12 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">CS QA MVP</div>
-      <div class="status" id="status">상태 확인 중…</div>
+      <div class="topbar-right">
+        <div class="status" id="status">상태 확인 중…</div>
+        <label class="toggle" title="판단 모델 경로와 바이패스 경로를 함께 실행해 결과를 비교합니다">
+          <input type="checkbox" id="compare"><span class="track"></span><span>비교 모드</span>
+        </label>
+      </div>
     </header>
 
     <main class="chat" id="chat">

@@ -6,6 +6,8 @@ const sendBtn = $("#send");
 const modal = $("#modal");
 const modalBody = $("#modal-body");
 const traces = new Map();
+const compareToggle = $("#compare");
+try { compareToggle.checked = localStorage.getItem("compare") === "1"; } catch {}
 
 const SAMPLES = [
   "주문을 취소하고 싶어요",
@@ -85,23 +87,58 @@ function addMessage(role, text) {
   return el;
 }
 
-function attachResult(el, data) {
+function metaHtml(t) {
+  const sources = t.selected_pages.map((p) => p.title).join(", ");
+  return (
+    `<div class="meta"><span class="route ${t.answer_mode}">${ROUTE_LABEL[t.answer_mode] || t.answer_mode}</span>` +
+    `<span>· ${(t.total_ms / 1000).toFixed(1)}초</span><span>· ${fmtCost(t.total_cost_usd)}</span>` +
+    (sources ? `<span>· 근거: ${esc(sources)}</span>` : "") +
+    (t.warnings.length ? `<span>· 경고 ${t.warnings.length}</span>` : "") +
+    `<span>· 눌러서 상세 보기</span></div>`
+  );
+}
+
+function keepTrace(trace) {
   const id = crypto.randomUUID();
-  traces.set(id, data.trace);
+  traces.set(id, trace);
+  return id;
+}
+
+function attachResult(el, data) {
   el.classList.add("clickable");
-  el.dataset.trace = id;
+  el.dataset.trace = keepTrace(data.trace);
   const bubble = el.querySelector(".bubble");
   bubble.classList.add("md");
   bubble.innerHTML = md(data.answer);
-  const t = data.trace;
-  const sources = t.selected_pages.map((p) => p.title).join(", ");
+  el.insertAdjacentHTML("beforeend", metaHtml(data.trace));
+}
+
+// 비교 모드 결과: 두 경로를 나란히 보여 주고, 차이를 한 줄로 요약한다.
+function attachCompare(el, data) {
+  const a = data.with_decision, b = data.bypass;
+  const card = (label, sub, r) =>
+    `<div class="cmp-card" data-trace="${keepTrace(r.trace)}">
+      <div class="cmp-head"><strong>${esc(label)}</strong><span>${esc(sub)}</span></div>
+      <div class="bubble md">${md(r.answer)}</div>
+      ${metaHtml(r.trace)}
+    </div>`;
+  const ta = a.trace, tb = b.trace;
+  const pagesA = ta.selected_pages.map((p) => p.id).join(","), pagesB = tb.selected_pages.map((p) => p.id).join(",");
+  const dCost = ta.total_cost_usd - tb.total_cost_usd, dMs = ta.total_ms - tb.total_ms;
+  const sign = (v) => (v > 0 ? "+" : v < 0 ? "−" : "±");
+  const diff = [
+    ta.answer_mode === tb.answer_mode ? "답변 방식 같음" : `답변 방식 다름 (${ROUTE_LABEL[ta.answer_mode]} vs ${ROUTE_LABEL[tb.answer_mode]})`,
+    pagesA === pagesB ? "근거 페이지 같음" : "근거 페이지 다름",
+    `비용 A−B ${sign(dCost)}${fmtCost(Math.abs(dCost))}`,
+    `시간 A−B ${sign(dMs)}${(Math.abs(dMs) / 1000).toFixed(1)}초`,
+  ];
+  el.classList.add("compare");
+  el.querySelector(".bubble").remove();
   el.insertAdjacentHTML(
     "beforeend",
-    `<div class="meta"><span class="route ${t.answer_mode}">${ROUTE_LABEL[t.answer_mode] || t.answer_mode}</span>` +
-      `<span>· ${(t.total_ms / 1000).toFixed(1)}초</span><span>· ${fmtCost(t.total_cost_usd)}</span>` +
-      (sources ? `<span>· 근거: ${esc(sources)}</span>` : "") +
-      (t.warnings.length ? `<span>· 경고 ${t.warnings.length}</span>` : "") +
-      `<span>· 눌러서 상세 보기</span></div>`
+    `<div class="cmp-grid">${card("A · 판단 모델 경로", ta.steps.find((s) => s.key === "decide")?.title.replace(/^페이지 선택 /, "") || "", a)}` +
+      `${card("B · 바이패스", "판단 모델 없이 BM25 1위 → LLM", b)}</div>` +
+      `<div class="cmp-diff">${diff.map(esc).join(" · ")}</div>`
   );
 }
 
@@ -111,13 +148,17 @@ async function ask(question) {
   bot.querySelector(".bubble").innerHTML = `<span class="typing">위키를 찾는 중…</span>`;
   sendBtn.disabled = true;
   try {
+    const compare = compareToggle.checked;
+    if (compare) bot.querySelector(".bubble").innerHTML = `<span class="typing">두 경로로 답을 만드는 중…</span>`;
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, compare }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    attachResult(bot, await res.json());
+    const data = await res.json();
+    if (compare) attachCompare(bot, data);
+    else attachResult(bot, data);
   } catch (e) {
     bot.querySelector(".bubble").textContent = `요청에 실패했습니다. ${e.message}`;
   } finally {
@@ -141,7 +182,8 @@ function usageText(u) {
   if (!u) return null;
   const i = u.input_tokens ?? u.prompt_tokens;
   const o = u.output_tokens ?? u.completion_tokens;
-  return esc([i !== undefined ? `입력 ${i.toLocaleString()}` : null, o !== undefined ? `출력 ${o.toLocaleString()}` : null].filter(Boolean).join(" / ") || JSON.stringify(u));
+  const c = u.cached_input_tokens;
+  return esc([i !== undefined ? `입력 ${i.toLocaleString()}` : null, c ? `(캐시 ${c.toLocaleString()})` : null, o !== undefined ? `출력 ${o.toLocaleString()}` : null].filter(Boolean).join(" / ") || JSON.stringify(u));
 }
 
 function chosenIds(trace) {
@@ -214,6 +256,7 @@ function openTrace(trace) {
     .join("");
   modalBody.innerHTML = `
     <div class="summary">
+      ${trace.path ? `<div class="stat"><div class="k">경로</div><div class="v">${trace.path === "bypass" ? "B · 바이패스" : "A · 판단 모델"}</div></div>` : ""}
       <div class="stat"><div class="k">답변 방식</div><div class="v route ${trace.answer_mode}">${ROUTE_LABEL[trace.answer_mode] || esc(trace.answer_mode)}</div></div>
       <div class="stat"><div class="k">총 소요</div><div class="v">${(trace.total_ms / 1000).toFixed(2)}초</div></div>
       <div class="stat"><div class="k">추정 비용</div><div class="v">${fmtCost(trace.total_cost_usd)}</div></div>
@@ -258,8 +301,11 @@ async function togglePreview(pageId) {
 // ---- events ----
 
 chat.addEventListener("click", (e) => {
-  const msg = e.target.closest(".msg.bot.clickable");
-  if (msg && traces.has(msg.dataset.trace)) openTrace(traces.get(msg.dataset.trace));
+  const el = e.target.closest("[data-trace]");
+  if (el && traces.has(el.dataset.trace)) openTrace(traces.get(el.dataset.trace));
+});
+compareToggle.addEventListener("change", () => {
+  try { localStorage.setItem("compare", compareToggle.checked ? "1" : "0"); } catch {}
 });
 modal.addEventListener("click", (e) => {
   if (e.target.closest("[data-close]")) closeModal();
