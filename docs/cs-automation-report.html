@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>카카오톡 채널 · CS 답변 서비스 · 노션 칸반 연동 조사 보고서</title>
+<style>
+  :root {
+    --text: #1f2328;
+    --muted: #5b6470;
+    --faint: #8a929c;
+    --line: #e4e7eb;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --accent: #2f5bea;
+    --accent-soft: #eef2fe;
+    --ok: #1a7f37;      --ok-bg: #e7f5ec;
+    --cond: #8a5a00;    --cond-bg: #fff3d4;
+    --no: #c42b1c;      --no-bg: #fdebe9;
+    --dev: #5a3fc0;     --dev-bg: #f0ecfd;
+    --unk: #57606a;     --unk-bg: #eef1f4;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+    font-size: 16px;
+    line-height: 1.75;
+    letter-spacing: -0.01em;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+  .page { max-width: 960px; margin: 0 auto; padding: 64px 32px 96px; }
+
+  /* 머리말 */
+  header { margin-bottom: 48px; }
+  .eyebrow { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); margin: 0 0 12px; }
+  h1 { font-size: 32px; line-height: 1.35; letter-spacing: -0.025em; margin: 0 0 16px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px; color: var(--muted); margin: 0; padding: 0; list-style: none; }
+  .meta li::before { content: "·"; margin-right: 8px; color: var(--faint); }
+  .meta li:first-child::before { content: none; }
+
+  /* 제목 계층 */
+  h2 { font-size: 22px; line-height: 1.4; letter-spacing: -0.02em; margin: 64px 0 20px; padding-top: 8px; }
+  h2 .num { display: inline-block; min-width: 28px; color: var(--accent); }
+  h3 { font-size: 17px; line-height: 1.5; letter-spacing: -0.015em; margin: 28px 0 10px; }
+  h3:first-child { margin-top: 0; }
+  p { margin: 0 0 14px; }
+  p:last-child { margin-bottom: 0; }
+  ul { margin: 0 0 14px; padding-left: 20px; }
+  ul:last-child { margin-bottom: 0; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.86em; background: #f0f2f5; padding: 2px 6px; border-radius: 4px; letter-spacing: 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 14px; }
+
+  /* 카드 */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 32px; }
+  .card + .card { margin-top: 16px; }
+  .grid2 > .card + .card { margin-top: 0; }
+
+  /* 결론 박스 */
+  .conclusion { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 24px 28px; font-size: 17px; line-height: 1.7; }
+  .conclusion strong { color: var(--text); }
+
+  /* 요약 4칸 */
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+  .sum { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  .sum .badge { margin-bottom: 12px; }
+  .sum ul { padding-left: 16px; font-size: 14.5px; line-height: 1.65; }
+
+  /* 판정 배지 */
+  .badge { display: inline-block; font-size: 12.5px; font-weight: 700; line-height: 1; padding: 6px 10px; border-radius: 999px; letter-spacing: 0; white-space: nowrap; }
+  .ok { color: var(--ok); background: var(--ok-bg); }
+  .cond { color: var(--cond); background: var(--cond-bg); }
+  .no { color: var(--no); background: var(--no-bg); }
+  .dev { color: var(--dev); background: var(--dev-bg); }
+  .unk { color: var(--unk); background: var(--unk-bg); }
+
+  /* 흐름도 */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; counter-reset: step; }
+  .step { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .step .no-label { font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: 0.04em; }
+  .step .title { font-size: 15.5px; font-weight: 700; line-height: 1.45; }
+  .step .desc { font-size: 13.5px; line-height: 1.6; color: var(--muted); }
+  .step .who { font-size: 12.5px; color: var(--faint); margin-top: auto; padding-top: 8px; border-top: 1px dashed var(--line); }
+
+  /* 단계 상세 */
+  .detail-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .detail-head h3 { margin: 0; font-size: 18px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 28px; }
+  .block-label { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; margin: 0 0 6px; }
+  .grid2 ul { font-size: 15px; line-height: 1.7; }
+
+  /* 원문 인용 */
+  .quotes { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+  blockquote { margin: 10px 0 0; padding: 10px 16px; background: #f8f9fb; border-left: 3px solid #c9d1db; border-radius: 0 8px 8px 0; font-size: 14px; line-height: 1.65; color: #343a42; }
+  blockquote cite { display: block; margin-top: 4px; font-style: normal; font-size: 12.5px; color: var(--faint); }
+
+  /* 표 */
+  .table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; line-height: 1.65; }
+  th, td { text-align: left; vertical-align: top; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  th { background: #f8f9fb; font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.01em; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+
+  /* 결정 사항 */
+  .decision { display: grid; grid-template-columns: 36px 1fr; gap: 0 16px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+  .decision:first-child { padding-top: 0; }
+  .decision:last-child { border-bottom: 0; padding-bottom: 0; }
+  .decision .n { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .decision h3 { margin: 4px 0 8px; }
+  .decision p, .decision ul { font-size: 15px; }
+
+  /* 출처 */
+  .sources li { font-size: 14px; line-height: 1.6; margin: 8px 0; }
+  .sources .url { color: var(--faint); font-size: 12.5px; word-break: break-all; }
+
+  footer { margin-top: 64px; font-size: 13px; color: var(--faint); text-align: center; }
+
+  @media (max-width: 860px) {
+    .flow { grid-template-columns: 1fr; }
+    .summary { grid-template-columns: 1fr 1fr; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .page { padding: 40px 18px 72px; }
+    h1 { font-size: 26px; }
+    .card { padding: 22px 20px; }
+    .summary { grid-template-columns: 1fr; }
+  }
+  @media print {
+    body { background: #fff; font-size: 13px; }
+    .page { padding: 0; max-width: none; }
+    .card, .sum, .step, .table-wrap, .conclusion { break-inside: avoid; }
+    h2 { margin-top: 36px; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+<header>
+  <p class="eyebrow">조사 보고서</p>
+  <h1>카카오톡 채널 · CS 답변 서비스 · 노션 칸반<br>연동 자동화 가능성 조사</h1>
+  <ul class="meta">
+    <li>작성일 2026-10-18</li>
+    <li>대상: CS 질문 답변 PoC (cs-qa-mvp)</li>
+    <li>근거: 카카오·노션 공식 문서, 실제 노션 보드와 PoC 코드 확인</li>
+  </ul>
+</header>
+
+<!-- 결론 -->
+<section>
+  <div class="conclusion">
+    <strong>전체 흐름은 공식 기능으로 자동화할 수 있습니다.</strong> 다만 카카오 쪽은 승인·인증·비용 조건이 붙습니다. 그리고 "언제 티켓을 만들 것인가"를 판단하는 대화 관리 기능은 PoC에 새로 만들어야 합니다.
+    노션 쪽은 카드 생성과 단계 변경 감지 모두 API로 할 수 있습니다. 하지만 이벤트가 늦게 오거나 빠질 수 있어 보정 장치가 필요합니다.
+  </div>
+
+  <div class="summary">
+    <div class="sum">
+      <span class="badge ok">가능</span>
+      <ul>
+        <li>노션에 CS 카드 생성</li>
+        <li>단계·우선순위·카테고리 기록</li>
+        <li>할당일·완료일 자동 기록</li>
+        <li>사용자 구분키로 문의자 식별</li>
+      </ul>
+    </div>
+    <div class="sum">
+      <span class="badge cond">조건부</span>
+      <ul>
+        <li>채널 문의에 답변 전달 (5초 제한으로 콜백 필요)</li>
+        <li>노션 단계 변경 감지 (공개 서버 필요)</li>
+        <li>처리 결과 먼저 보내기 (인증·비용)</li>
+      </ul>
+    </div>
+    <div class="sum">
+      <span class="badge dev">우리 쪽 개발</span>
+      <ul>
+        <li>대화 단위 관리 (지금은 질문 한 줄만 받음)</li>
+        <li>티켓 생성 시점 판단</li>
+        <li>카카오·노션 요청을 받는 공개 HTTPS 서버</li>
+      </ul>
+    </div>
+    <div class="sum">
+      <span class="badge no">API로 불가</span>
+      <ul>
+        <li>노션 카드 템플릿 새로 만들기</li>
+        <li>노션 상태 그룹·선택지 이름 바꾸기</li>
+        <li>CS 번호·등록일시 직접 쓰기</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 전체 흐름 -->
+<section>
+  <h2><span class="num">1</span>전체 흐름과 단계별 판정</h2>
+  <div class="flow">
+    <div class="step">
+      <span class="no-label">STEP 1</span>
+      <span class="title">채널로 문의 접수</span>
+      <span class="badge cond" style="align-self:flex-start">조건부</span>
+      <span class="desc">채널에 연결한 챗봇이 메시지를 우리 서버로 넘김</span>
+      <span class="who">카카오 챗봇 → 우리 서버</span>
+    </div>
+    <div class="step">
+      <span class="no-label">STEP 2</span>
+      <span class="title">답변 생성·전달</span>
+      <span class="badge cond" style="align-self:flex-start">조건부</span>
+      <span class="desc">5초 안에 못 끝나면 콜백으로 나중에 답변</span>
+      <span class="who">PoC 파이프라인</span>
+    </div>
+    <div class="step">
+      <span class="no-label">STEP 3</span>
+      <span class="title">노션 티켓 생성</span>
+      <span class="badge ok" style="align-self:flex-start">가능</span>
+      <span class="desc">생성은 API로 가능. 생성 시점 판단은 새로 개발</span>
+      <span class="who">우리 서버 → 노션</span>
+    </div>
+    <div class="step">
+      <span class="no-label">STEP 4</span>
+      <span class="title">크루 처리·단계 감지</span>
+      <span class="badge cond" style="align-self:flex-start">조건부</span>
+      <span class="desc">단계가 바뀌면 웹훅으로 알림. 지연·유실 대비 필요</span>
+      <span class="who">운영 크루 · 노션 → 우리 서버</span>
+    </div>
+    <div class="step">
+      <span class="no-label">STEP 5</span>
+      <span class="title">결과 통지</span>
+      <span class="badge cond" style="align-self:flex-start">조건부</span>
+      <span class="desc">Event API 또는 알림톡. 각각 인증·비용 조건 있음</span>
+      <span class="who">우리 서버 → 카카오</span>
+    </div>
+  </div>
+</section>
+
+<!-- 단계별 상세 -->
+<section>
+  <h2><span class="num">2</span>단계별 상세</h2>
+
+  <div class="card">
+    <div class="detail-head"><span class="badge cond">조건부</span><h3>STEP 1. 채널로 문의 접수</h3></div>
+    <div class="grid2">
+      <div>
+        <p class="block-label">되는 것</p>
+        <ul>
+          <li>채널에 카카오 챗봇을 연결하면 사용자 발화가 우리 서버(스킬 서버)로 전달됩니다.</li>
+          <li>요청마다 사용자 구분키가 함께 옵니다. 같은 사람을 다시 알아볼 수 있어서, 대화 묶음이나 티켓의 기준값으로 쓸 수 있습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="block-label">조건 · 확인 안 된 것</p>
+        <ul>
+          <li>사용자 구분키는 <strong>봇마다 다르게</strong> 발급됩니다. 봇을 바꾸면 같은 사람도 다른 키를 받습니다.</li>
+          <li>전화번호는 넘어오지 않습니다.</li>
+          <li>챗봇을 채널에 연결·배포하는 절차와 심사 여부는 이번 조사에서 확인하지 않았습니다.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="quotes">
+      <p class="block-label">공식 문서 원문</p>
+      <blockquote>"현재는 botUserKey만 제공합니다." / "동일한 사용자더라도, 봇이 다르면 다른 id가 발급됩니다."<cite>카카오 비즈니스 가이드 · 스킬 응답·요청 형식</cite></blockquote>
+      <blockquote>"카카오톡 채널에서 제공하는 사용자 구분키(비식별) 입니다."<cite>같은 문서 · plusfriendUserKey 설명</cite></blockquote>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="detail-head"><span class="badge cond">조건부</span><h3>STEP 2. 답변 생성·전달</h3></div>
+    <div class="grid2">
+      <div>
+        <p class="block-label">되는 것</p>
+        <ul>
+          <li>카카오는 스킬 서버의 응답을 <strong>5초</strong> 기다립니다. PoC는 LLM을 여러 번 호출하므로 이 안에 끝나지 않을 수 있습니다.</li>
+          <li><strong>콜백</strong>을 쓰면 먼저 "확인 중" 응답을 보내고, 답변이 준비되면 받은 주소로 다시 보낼 수 있습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="block-label">조건 · 확인 안 된 것</p>
+        <ul>
+          <li>콜백 주소의 유효시간이 문서마다 1분 또는 5분으로 다릅니다. 어느 쪽이든 PoC 처리 시간보다는 깁니다.</li>
+          <li>콜백에 사전 신청·승인이 필요한지는 공식 문서에 없습니다. 개발자 포럼에 관리 메뉴의 "AI 챗봇 전환" 신청이 보이지 않는다는 글이 있어(비공식), 챗봇 관리자센터에 직접 문의해야 합니다.</li>
+          <li>PoC에는 카카오 요청 형식을 받아 콜백으로 답하는 연결부가 없어서 새로 만들어야 합니다.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="quotes">
+      <p class="block-label">공식 문서 원문</p>
+      <blockquote>"콜백 옵션을 설정할 경우 카카오 챗봇 플랫폼의 스킬의 처리시간 SLA(skill timeout: 5sec) 초과될 때에도 응답을 받아올 수 있습니다."<cite>카카오 비즈니스 가이드 · AI 챗봇 콜백 개발 가이드</cite></blockquote>
+      <blockquote>"일정시간(callbackUrl valid time: 5min)동안 유효하며 1회에 한하여 사용할 수 있습니다."<cite>같은 가이드 (고객센터 도움말에는 1min으로 적혀 있음)</cite></blockquote>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="detail-head"><span class="badge ok">가능</span><span class="badge dev">생성 시점 판단은 개발 필요</span><h3>STEP 3. 노션 티켓 생성</h3></div>
+    <div class="grid2">
+      <div>
+        <p class="block-label">되는 것</p>
+        <ul>
+          <li>CS 요약, 단계, 우선순위, 카테고리, 접수 채널, 담당자, 요청자 연락처, 할당일, 완료일은 API로 씁니다.</li>
+          <li>CS 번호와 등록일시는 노션이 자동으로 채웁니다.</li>
+          <li>이미 등록된 카드 템플릿을 적용해서 만들 수 있습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="block-label">조건 · 확인 안 된 것</p>
+        <ul>
+          <li><strong>템플릿은 API로 만들 수 없습니다.</strong> 지금 보드에는 등록된 템플릿이 0개라, 노션 화면에서 먼저 만들어야 합니다.</li>
+          <li>템플릿 적용은 백그라운드에서 진행되고, 본문 내용을 함께 보낼 수 없습니다.</li>
+          <li><strong>"문의가 끝났다 / 명확해졌다"를 판단할 근거가 PoC에 없습니다.</strong> 질문 API(<code>app/main.py:32</code>)가 질문 한 줄만 받고, 대화나 사용자를 구분하지 않습니다.</li>
+          <li>후보 신호: PoC가 이미 하는 "상담원 연결" 판정(<code>app/pipeline.py:211</code>), 사용자가 누르는 "상담직원 연결" 버튼</li>
+        </ul>
+      </div>
+    </div>
+    <div class="quotes">
+      <p class="block-label">공식 문서 원문</p>
+      <blockquote>"Notion assigns the number; you cannot set it in a page write."<cite>Notion API · Page property values (unique_id)</cite></blockquote>
+      <blockquote>"The Notion app can be used to create and manage templates."<cite>Notion API · Creating pages from templates</cite></blockquote>
+      <blockquote>"챗봇과 연결된 채널에서 1:1 채팅 혹은 상담톡 기능 연결 시, 사용자에게 '상담직원 연결' 혹은 '챗봇 전환' 버튼이 노출되어 대화 모드를 변경할 수 있습니다."<cite>카카오 비즈니스 고객센터 도움말</cite></blockquote>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="detail-head"><span class="badge cond">조건부</span><h3>STEP 4. 크루 처리와 단계 변경 감지</h3></div>
+    <div class="grid2">
+      <div>
+        <p class="block-label">되는 것</p>
+        <ul>
+          <li>크루가 단계를 바꾸면 노션이 우리 서버로 알림(웹훅)을 보냅니다.</li>
+          <li>알림을 받은 서버가 할당일·완료일을 채우고, "완료"면 STEP 5를 시작합니다.</li>
+          <li>알림마다 수정 주체가 사람인지 봇인지 표시돼서, 우리 서버가 한 수정은 걸러 낼 수 있습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="block-label">조건 · 확인 안 된 것</p>
+        <ul>
+          <li>공개 HTTPS 주소가 필요합니다. 지금처럼 로컬에서 띄운 서버로는 받을 수 없습니다.</li>
+          <li>알림에는 무엇이 바뀌었는지 ID만 들어 있어서 값을 다시 조회해야 합니다.</li>
+          <li>지연(보통 1분 이내, 최대 5분), 순서 뒤바뀜, 유실이 생길 수 있습니다. 주기적으로 상태를 맞춰 보는 조회가 필요합니다.</li>
+          <li>우리 서버가 날짜를 채운 수정이 다시 알림으로 돌아오는지는 문서로 확인되지 않아, 실제로 시험해 봐야 합니다.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="quotes">
+      <p class="block-label">공식 문서 원문</p>
+      <blockquote>"The events themselves do not contain the full content that changed."<cite>Notion API · Webhooks events delivery</cite></blockquote>
+      <blockquote>"We aim for at-most-once event delivery." / "Events may arrive in a different order than they occurred."<cite>같은 문서</cite></blockquote>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="detail-head"><span class="badge cond">조건부</span><h3>STEP 5. 처리 결과 통지</h3></div>
+    <div class="grid2">
+      <div>
+        <p class="block-label">되는 것</p>
+        <ul>
+          <li>채널을 추가한 사용자에게는 STEP 1의 사용자 구분키로 챗봇이 먼저 메시지를 보낼 수 있습니다(Event API).</li>
+          <li>채널을 추가하지 않은 사용자에게는 전화번호로 알림톡을 보낼 수 있습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="block-label">조건 · 확인 안 된 것</p>
+        <ul>
+          <li>방법별 조건은 아래 4절 표에 정리했습니다.</li>
+          <li>Event API의 광고 표시 예외("고객의 요청에 의해 발송하는 1회성 정보")에 CS 처리 결과 통지가 해당하는지는 확인되지 않았습니다.</li>
+          <li>상담톡을 쓰는 경우, 상담 세션이 열리기 전에는 상담원이 먼저 말을 걸 수 없습니다.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="quotes">
+      <p class="block-label">공식 문서 원문</p>
+      <blockquote>"Event API는 채널을 추가한 유저에게만 전송 가능하므로, 채널을 추가하지 않았거나 차단한 경우 전송은 실패합니다."<cite>카카오 비즈니스 가이드 · Event API</cite></blockquote>
+      <blockquote>"상담 세션이 열리기 전까지는 상담원이 카카오톡 이용자에게 먼저 말을 걸 수는 없습니다."<cite>카카오 비즈니스 가이드 · 상담톡</cite></blockquote>
+    </div>
+  </div>
+</section>
+
+<!-- 노션 감지 방법 비교 -->
+<section>
+  <h2><span class="num">3</span>노션 단계 변경 감지 방법 비교</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>방법</th><th>필요 조건</th><th>장점</th><th>주의점</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>연동 웹훅<br><span class="muted small">(지금 연결된 통합 토큰 방식)</span></td>
+          <td>공개 HTTPS 주소, 구독 검증 절차(검증 토큰을 설정 화면에 붙여 넣기)</td>
+          <td>요금제와 무관하게 쓸 수 있습니다. 서명 헤더로 진짜 노션 요청인지 검증할 수 있습니다.</td>
+          <td>ID만 오므로 다시 조회해야 합니다. 지연·순서 뒤바뀜·유실 가능성이 있습니다. 실패 시 최대 8회 재시도합니다.</td>
+        </tr>
+        <tr>
+          <td>데이터베이스 자동화<br><span class="muted small">(웹훅 보내기 동작)</span></td>
+          <td><strong>유료 요금제</strong></td>
+          <td>"단계가 완료로 설정될 때"처럼 조건을 좁게 걸 수 있고, 속성 값이 함께 옵니다.</td>
+          <td>전송이 한 번 실패하면 자동화가 일시정지되고, 사람이 다시 켜야 합니다. 보내는 내용을 미리 볼 수 없습니다.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small" style="margin-top:12px">요청 수 제한: 비즈니스·엔터프라이즈 요금제 분당 600회, 그 외 분당 180회. 이 워크스페이스의 요금제는 API로 확인할 수 없어 아직 모릅니다.</p>
+</section>
+
+<!-- 결과 통지 비교 -->
+<section>
+  <h2><span class="num">4</span>처리 결과 통지 방법 비교</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>방법</th><th>받는 사람</th><th>필요한 것</th><th>비용</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Event API<br><span class="muted small">(챗봇이 먼저 말 걸기)</span></td>
+          <td>채널을 추가한 사용자만. 차단했거나 추가하지 않았으면 실패</td>
+          <td>비즈니스 인증 채널과 비즈니스 인증 앱 연결, 결제 수단(월렛) 생성·연결</td>
+          <td>건당 15원 (VAT 별도)</td>
+        </tr>
+        <tr>
+          <td>알림톡</td>
+          <td>채널을 추가하지 않은 사용자도 가능</td>
+          <td>공식 딜러사 계약, 카카오의 템플릿 심사, 적법하게 수집한 전화번호</td>
+          <td>딜러사마다 다름 (문서에 단가 없음)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 현재 상태 점검 -->
+<section>
+  <h2><span class="num">5</span>현재 상태 점검 (직접 확인)</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>노션 보드 "CS 처리 보드"</h3>
+      <ul class="small">
+        <li><strong>요청자 연락처</strong>가 이메일 형식입니다. 카카오 사용자 구분키나 전화번호를 담을 속성이 없습니다.</li>
+        <li><strong>접수 채널</strong> 선택지(문의 폼, 이메일, 커뮤니티, 기타)에 카카오톡 채널이 없습니다. API로 추가할 수 있습니다.</li>
+        <li><strong>단계</strong>의 네 값이 모두 할 일 그룹에 있습니다. 진행중·완료 그룹으로의 재배치는 API로 가능하다고 문서에 나옵니다(미시험).</li>
+        <li>등록된 <strong>카드 템플릿</strong>이 0개입니다.</li>
+        <li>지금 연결된 노션 통합으로 이 보드를 읽고 쓸 수 있습니다.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>CS 답변 PoC <span class="badge dev" style="margin-left:6px">기능 브랜치에서 구현</span></h3>
+      <ul class="small">
+        <li><strong>상담 종료 → 노션 티켓:</strong> 채팅 화면의 "상담 종료" 버튼을 누르면 LLM이 대화를 요약·분류해 CS 처리 보드에 카드를 만듭니다. 챗봇 답변이 상담원 연결로 분류되면 버튼 없이 바로 만듭니다.</li>
+        <li><strong>대화 문맥 전달:</strong> 질문할 때 최근 6개 메시지를 함께 보냅니다. 자세한 내용은 6절에 있습니다.</li>
+        <li>대화 기록은 브라우저에만 있어, 새로고침하면 사라집니다. 서버 세션은 아직 없습니다.</li>
+        <li>맞는 위키 페이지가 없거나 확신이 낮으면 "상담원 연결"로 분류합니다. 이때 화면이 그때까지의 대화로 티켓을 바로 만들어 담당자에게 넘기고 상담을 끝냅니다.</li>
+        <li>로컬 개발 서버로만 실행됩니다. 카카오·노션 요청을 받으려면 공개 HTTPS 배포가 필요합니다.</li>
+        <li>문맥이 이어지자 챗봇이 "인증 코드를 발송하겠습니다"처럼 실제로 할 수 없는 조치를 약속하는 문제가 확인됐습니다. 답변 지침 보강이 필요합니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 대화 문맥 관리 -->
+<section>
+  <h2><span class="num">6</span>대화 문맥 관리 방식</h2>
+  <p class="muted">대화 문맥을 끝없이 유지할 수는 없습니다. 아래는 OpenAI, Anthropic, LangChain·LangGraph, LlamaIndex, Google Dialogflow CX, AWS Lex V2, Microsoft Copilot Studio 공식 문서에 나오는 방식입니다. 인용 문구는 원문에 그대로 있는지 대조했습니다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>방식</th><th>내용</th><th>장단점</th><th>지금 PoC</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>최근 N개만 유지</td>
+          <td>오래된 메시지부터 버리거나, 토큰 수가 한도에 가까워지면 자릅니다.</td>
+          <td>가장 단순합니다. 잘린 앞부분의 정보는 사라집니다.</td>
+          <td><span class="badge ok">적용함</span><br><span class="muted small">최근 6개 메시지</span></td>
+        </tr>
+        <tr>
+          <td>검색용 질문 재작성</td>
+          <td>이력을 보고 이번 메시지를 그것만으로 검색 가능한 질문으로 바꿔 검색합니다. 이력이 없으면 원문 그대로 검색합니다.</td>
+          <td>이어지는 질문의 검색 정확도를 지킵니다. LLM 호출이 한 번 더 듭니다.</td>
+          <td><span class="badge ok">적용함</span><br><span class="muted small">검색어 변환 단계에 이전 질문 전달</span></td>
+        </tr>
+        <tr>
+          <td>요약 + 최근 원문 유지</td>
+          <td>오래된 대화는 요약으로 바꾸고 최근 몇 턴은 원문 그대로 둡니다. Anthropic과 OpenAI 모두 서버 쪽 압축 기능을 공식 제공합니다.</td>
+          <td>긴 상담도 이어 갈 수 있습니다. 요약하면서 정보가 빠질 수 있고, 요약 호출 비용이 듭니다.</td>
+          <td><span class="badge unk">미적용</span></td>
+        </tr>
+        <tr>
+          <td>서버 세션 저장 + 만료</td>
+          <td>대화별 상태를 서버에 저장하고, 일정 시간 요청이 없으면 끝냅니다. 기본값은 AWS Lex 5분, Dialogflow 30분이고, 최대는 둘 다 24시간입니다.</td>
+          <td>만료가 짧으면 고객이 처음부터 다시 말해야 하고, 길면 저장 부담이 커집니다.</td>
+          <td><span class="badge unk">미적용</span><br><span class="muted small">브라우저에만 보관</span></td>
+        </tr>
+        <tr>
+          <td>명시적 초기화</td>
+          <td>대화 종료 시점에 맥락을 비웁니다. 확인한 공식 문서에 주제 전환을 자동으로 감지하는 기법은 없었습니다.</td>
+          <td>동작이 확실합니다. 초기화 시점은 직접 설계해야 합니다.</td>
+          <td><span class="badge ok">적용함</span><br><span class="muted small">상담 종료 버튼으로 비움</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <p class="block-label">공식 문서 원문</p>
+    <blockquote>"If there is no <code>chat_history</code>, then the <code>input</code> is just passed directly to the retriever. If there is <code>chat_history</code>, then the prompt and LLM will be used to generate a search query."<cite>LangChain · create_history_aware_retriever</cite></blockquote>
+    <blockquote>"Compaction replaces the older turns of a conversation with a summary that Claude writes on the server ... because response quality degrades as a conversation grows."<cite>Anthropic · Compaction</cite></blockquote>
+    <blockquote>"A session remains active and its data is stored for 30 minutes after the last request is sent for the session."<cite>Google Dialogflow CX · Sessions</cite></blockquote>
+    <blockquote>"By default, session duration is 5 minutes, but you can specify any duration between 0 and 1,440 minutes (24 hours)."<cite>AWS Lex V2 · Session timeout</cite></blockquote>
+    <blockquote>"all previous input tokens for responses in the chain are billed as input tokens in the API."<cite>OpenAI · Conversation state (이전 응답 이어 붙이기도 입력 토큰을 다시 과금)</cite></blockquote>
+  </div>
+
+  <h3 style="margin-top:32px">PoC에 적용한 결과 (실측)</h3>
+  <p class="small muted">로그인 상담 대화의 마지막 질문 "발송해주세요"를 실행 중인 서버로 두 번 보냈습니다. 한 번씩만 비교한 결과라서, 출력 토큰(추론 포함)의 호출별 편차가 큽니다. 평균적인 증가 폭으로 보기는 어렵습니다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>항목</th><th>이전 대화 없음</th><th>이전 대화 6개 메시지</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>검색어</td><td>please ship my order now</td><td>send verification email to updated email for account hellotest</td></tr>
+        <tr><td>근거 문서</td><td>주문 배송 문제, 배송 가능 상품 (주문 쪽)</td><td>휴대폰·이메일 인증 (계정 쪽)</td></tr>
+        <tr><td>검색어 변환 토큰</td><td>입력 75 / 출력 116</td><td>입력 172 / 출력 240</td></tr>
+        <tr><td>답변 생성 토큰</td><td>입력 1,822 / 출력 825</td><td>입력 1,291 / 출력 1,059</td></tr>
+        <tr><td>총 비용</td><td>0.0024달러</td><td>0.0030달러</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted" style="margin-top:12px">답변 생성 입력이 오히려 줄어든 것은 근거 문서가 2개에서 1개로 바뀌었기 때문입니다. 입력량에는 대화가 붙는 양보다 위키 문서가 몇 개 걸리느냐가 더 크게 작용합니다.</p>
+
+  <h3 style="margin-top:32px">실제 서비스라면 (조사 결과를 바탕으로 한 판단)</h3>
+  <div class="card">
+    <p class="small muted">출처가 직접 언급한 조합은 "요약 + 최근 원문 유지", "이력 반영 질문 재작성 후 검색", "세션 만료 후 이전 상태 복원"입니다. 이 조합들이 실제 상담 챗봇에서 얼마나 널리 쓰이는지는 어느 출처에도 없습니다. 아래는 이를 이 서비스에 맞춰 본 판단입니다.</p>
+    <ul>
+      <li><strong>세션을 서버에 저장합니다.</strong> 카카오 채널을 붙이면 챗봇 요청에 담기는 사용자 구분키를 세션 키로 씁니다. 지금의 브라우저 보관은 PoC용입니다.</li>
+      <li><strong>세션 만료를 둡니다.</strong> 대화가 일정 시간 멈추면 만료 처리합니다. 만료를 "티켓을 만드는 시점"과 묶으면, 상담 종료 버튼 없이도 자동으로 티켓이 생깁니다.</li>
+      <li><strong>지금 방식은 그대로 둡니다.</strong> 최근 N개 유지와 검색용 질문 재작성은 이미 적용돼 있습니다.</li>
+      <li><strong>긴 상담이 많아지면 요약 + 최근 원문 유지로 넓힙니다.</strong> 지금 단계에서는 필요 없습니다.</li>
+      <li><strong>개인정보를 걸러 냅니다.</strong> 상담 챗봇에 특화된 공식 지침은 찾지 못했습니다. Anthropic 문서에 저장 전 민감 정보를 걸러 내고, 오래 안 쓴 기억은 주기적으로 지우라는 일반 지침이 있습니다. 테스트 대화에서 고객이 휴대폰 번호를 채팅에 적은 사례가 실제로 있었습니다.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <p class="block-label">지금 코드에서 알아 둘 점 · 프롬프트 캐싱</p>
+    <ul class="small">
+      <li>요청마다 똑같이 반복되는 앞부분은 캐싱으로 싸게 처리됩니다. OpenAI는 최대 95% 할인하며, 1,024 토큰 이상이어야 캐시됩니다. OpenAI 문서는 고정된 내용을 앞에 두라고 권합니다.</li>
+      <li>PoC는 답변 생성 입력에서 이전 대화를 위키 문서보다 앞에 넣습니다. 그래서 대화가 길어질수록 캐시가 덜 맞을 수 있습니다(문서 문구에서 추론).</li>
+      <li>지금 답변 지침은 짧아서 캐시 최소 길이에 못 미칠 가능성이 큽니다(토큰 수는 재 보지 않음). 그래서 지금 당장은 순서를 바꿔도 차이가 없을 수 있습니다. 지침이 길어지면 다시 검토합니다.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 결정 필요 -->
+<section>
+  <h2><span class="num">7</span>정해야 할 것</h2>
+  <div class="card">
+    <div class="decision">
+      <div class="n">1</div>
+      <div>
+        <h3>티켓을 만드는 시점</h3>
+        <p>PoC가 "상담원 연결"로 분류했을 때, 사용자가 "상담직원 연결"을 눌렀을 때, 대화가 일정 시간 멈췄을 때 중 무엇을 기준으로 할지 정해야 합니다. 지금 PoC는 상담 종료 버튼을 누를 때와 상담원 연결로 분류됐을 때 만듭니다. 대화가 멈췄을 때를 추가하려면 아래 세션 만료와 함께 정해야 합니다.</p>
+      </div>
+    </div>
+    <div class="decision">
+      <div class="n">2</div>
+      <div>
+        <h3>처리 결과 통지 방식</h3>
+        <p>Event API를 쓰면 채널을 추가한 사용자에게만 건당 15원으로 보낼 수 있습니다. 알림톡을 쓰면 모든 사용자에게 보낼 수 있지만 딜러사 계약, 템플릿 심사, 전화번호 수집이 필요합니다. 고르는 쪽에 따라 노션 보드에 저장할 값(사용자 구분키 또는 전화번호)도 정해집니다.</p>
+      </div>
+    </div>
+    <div class="decision">
+      <div class="n">3</div>
+      <div>
+        <h3>노션 요금제</h3>
+        <p>유료 요금제면 단계 변경 감지에 데이터베이스 자동화를 쓸 수 있습니다. 무료 요금제면 연동 웹훅만 쓸 수 있습니다. 요금제는 API로 확인할 수 없어서 알려 주셔야 합니다.</p>
+      </div>
+    </div>
+    <div class="decision">
+      <div class="n">4</div>
+      <div>
+        <h3>카카오 쪽 사전 확인</h3>
+        <p>챗봇 관리자센터에 콜백 사용에 신청·승인이 필요한지, 채널이 비즈니스 인증을 받았는지 확인해야 합니다. Event API를 쓰려면 비즈니스 인증이 필수입니다.</p>
+      </div>
+    </div>
+    <div class="decision">
+      <div class="n">5</div>
+      <div>
+        <h3>대화 세션 저장 위치와 만료 시간</h3>
+        <p>대화를 서버에 몇 분 동안 보관하고, 만료되면 어떻게 할지 정해야 합니다. 예를 들어 만료 시 자동으로 티켓을 만들거나 그냥 버릴 수 있습니다. 참고 기준은 AWS Lex 기본 5분, Dialogflow 기본 30분이고, 최대는 둘 다 24시간입니다. 짧을수록 고객이 다시 설명해야 하는 일이 늘고, 길수록 저장 부담과 개인정보 보관 기간이 늘어납니다.</p>
+      </div>
+    </div>
+    <div class="decision">
+      <div class="n">6</div>
+      <div>
+        <h3>챗봇이 할 수 없는 조치를 약속하지 않게 하기</h3>
+        <p>답변 지침에 "직접 처리할 수 없는 조치(코드 발송, 정보 변경)는 약속하지 말고 상담원 연결을 안내한다", "개인정보를 채팅에 적어 달라고 요청하지 않는다"를 넣을지 정해야 합니다. 넣으면 대화가 덜 매끄러워 보일 수 있지만, 고객에게 거짓 약속을 하지 않게 됩니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 출처 -->
+<section>
+  <h2><span class="num">8</span>출처와 신뢰도</h2>
+  <div class="card">
+    <p class="small muted">모든 출처는 2026-10-18에 확인했습니다. 카카오 문서와 대화 문맥 관리 문서 인용은 원문과 대조했습니다. 노션 문서 인용은 웹 페이지를 요약해 가져오는 도구로 얻은 것이라 몇 단어 다를 수 있습니다. 설계에 확정 반영하기 전에 원문 대조가 필요합니다.</p>
+    <h3>카카오</h3>
+    <ul class="sources">
+      <li>스킬 요청·응답 형식 (사용자 구분키) <br><span class="url"><a href="https://kakaobusiness.gitbook.io/main/tool/chatbot/skill_guide/answer_json_format">https://kakaobusiness.gitbook.io/main/tool/chatbot/skill_guide/answer_json_format</a></span></li>
+      <li>AI 챗봇 콜백 개발 가이드 (5초 제한, 콜백) <br><span class="url"><a href="https://kakaobusiness.gitbook.io/main/tool/chatbot/skill_guide/ai_chatbot_callback_guide">https://kakaobusiness.gitbook.io/main/tool/chatbot/skill_guide/ai_chatbot_callback_guide</a></span></li>
+      <li>고객센터 도움말 · 콜백 유효시간 <br><span class="url"><a href="https://cs.kakao.com/helps_html/1073206022?locale=ko">https://cs.kakao.com/helps_html/1073206022?locale=ko</a></span></li>
+      <li>고객센터 도움말 · 상담직원 연결 버튼 <br><span class="url"><a href="https://cs.kakao.com/helps_html/1073196684?locale=ko">https://cs.kakao.com/helps_html/1073196684?locale=ko</a></span></li>
+      <li>Event API (먼저 보내기, 비용, 인증 요건) <br><span class="url"><a href="https://kakaobusiness.gitbook.io/main/tool/chatbot/main_notions/event-api">https://kakaobusiness.gitbook.io/main/tool/chatbot/main_notions/event-api</a></span></li>
+      <li>알림톡 <br><span class="url"><a href="https://kakaobusiness.gitbook.io/main/ad/infotalk">https://kakaobusiness.gitbook.io/main/ad/infotalk</a></span></li>
+      <li>상담톡 <br><span class="url"><a href="https://kakaobusiness.gitbook.io/main/ad/cstalk">https://kakaobusiness.gitbook.io/main/ad/cstalk</a></span></li>
+    </ul>
+    <h3>노션</h3>
+    <ul class="sources">
+      <li>페이지 생성 · 속성 값 <br><span class="url"><a href="https://developers.notion.com/reference/post-page">https://developers.notion.com/reference/post-page</a> · <a href="https://developers.notion.com/reference/page-property-values">https://developers.notion.com/reference/page-property-values</a></span></li>
+      <li>템플릿으로 페이지 생성 · 템플릿 목록 <br><span class="url"><a href="https://developers.notion.com/docs/creating-pages-from-templates">https://developers.notion.com/docs/creating-pages-from-templates</a> · <a href="https://developers.notion.com/reference/list-data-source-templates">https://developers.notion.com/reference/list-data-source-templates</a></span></li>
+      <li>데이터 소스 속성 수정 (선택지·상태 옵션) <br><span class="url"><a href="https://developers.notion.com/reference/update-data-source-properties">https://developers.notion.com/reference/update-data-source-properties</a></span></li>
+      <li>웹훅 · 이벤트 전달 <br><span class="url"><a href="https://developers.notion.com/reference/webhooks">https://developers.notion.com/reference/webhooks</a> · <a href="https://developers.notion.com/reference/webhooks-events-delivery">https://developers.notion.com/reference/webhooks-events-delivery</a></span></li>
+      <li>데이터베이스 자동화 · 웹훅 보내기 동작 <br><span class="url"><a href="https://www.notion.com/help/database-automations">https://www.notion.com/help/database-automations</a> · <a href="https://www.notion.com/help/webhook-actions">https://www.notion.com/help/webhook-actions</a></span></li>
+      <li>요청 제한 <br><span class="url"><a href="https://developers.notion.com/reference/request-limits">https://developers.notion.com/reference/request-limits</a></span></li>
+    </ul>
+    <h3>대화 문맥 관리</h3>
+    <ul class="sources">
+      <li>LangChain · 단기 기억(최근 메시지 자르기) <br><span class="url"><a href="https://docs.langchain.com/oss/python/langchain/short-term-memory">https://docs.langchain.com/oss/python/langchain/short-term-memory</a></span></li>
+      <li>LangChain · 이력 반영 검색기 <br><span class="url"><a href="https://reference.langchain.com/python/langchain-classic/chains/history_aware_retriever/create_history_aware_retriever">https://reference.langchain.com/python/langchain-classic/chains/history_aware_retriever/create_history_aware_retriever</a></span></li>
+      <li>LlamaIndex · 채팅 엔진 사용 패턴 (질문 재작성 + 문맥) <br><span class="url"><a href="https://developers.llamaindex.ai/python/framework/module_guides/deploying/chat_engines/usage_pattern/">https://developers.llamaindex.ai/python/framework/module_guides/deploying/chat_engines/usage_pattern/</a></span></li>
+      <li>LangGraph · 기억(세션·장기 기억) <br><span class="url"><a href="https://docs.langchain.com/oss/python/langgraph/memory">https://docs.langchain.com/oss/python/langgraph/memory</a></span></li>
+      <li>Anthropic · 압축, 맥락 창, 프롬프트 캐싱, 메모리 도구 <br><span class="url"><a href="https://platform.claude.com/docs/en/build-with-claude/compaction">https://platform.claude.com/docs/en/build-with-claude/compaction</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/context-windows">https://platform.claude.com/docs/en/build-with-claude/context-windows</a> · <a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">https://platform.claude.com/docs/en/build-with-claude/prompt-caching</a> · <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool">https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool</a></span></li>
+      <li>OpenAI · 응답 생성 API(자르기 설정), 대화 상태, 압축, 프롬프트 캐싱 <br><span class="url"><a href="https://developers.openai.com/api/reference/resources/responses/methods/create">https://developers.openai.com/api/reference/resources/responses/methods/create</a> · <a href="https://developers.openai.com/api/docs/guides/conversation-state">https://developers.openai.com/api/docs/guides/conversation-state</a> · <a href="https://developers.openai.com/api/docs/guides/compaction">https://developers.openai.com/api/docs/guides/compaction</a> · <a href="https://developers.openai.com/api/docs/guides/prompt-caching">https://developers.openai.com/api/docs/guides/prompt-caching</a></span></li>
+      <li>Google Dialogflow CX · 세션 <br><span class="url"><a href="https://docs.cloud.google.com/dialogflow/cx/docs/concept/session">https://docs.cloud.google.com/dialogflow/cx/docs/concept/session</a></span></li>
+      <li>AWS Lex V2 · 세션 만료 <br><span class="url"><a href="https://docs.aws.amazon.com/lexv2/latest/dg/context-mgmt-session-timeout.html">https://docs.aws.amazon.com/lexv2/latest/dg/context-mgmt-session-timeout.html</a></span></li>
+      <li>Microsoft Copilot Studio · 토픽 관리(대화 종료) <br><span class="url"><a href="https://learn.microsoft.com/en-us/microsoft-copilot-studio/authoring-topic-management">https://learn.microsoft.com/en-us/microsoft-copilot-studio/authoring-topic-management</a></span></li>
+    </ul>
+    <h3>비공식 참고 (근거로 쓰지 않음)</h3>
+    <ul class="sources">
+      <li>카카오 개발자 포럼 · "AI 챗봇 전환" 신청 메뉴가 보이지 않는다는 사례 (2026-06) <br><span class="url"><a href="https://devtalk.kakao.com/t/ai-ai/150174">https://devtalk.kakao.com/t/ai-ai/150174</a></span></li>
+    </ul>
+  </div>
+</section>
+
+<footer>cs-qa-mvp · 조사 보고서 · 2026-10-18 (대화 문맥 관리, PoC 구현 현황 추가)</footer>
+</main>
+</body>
+</html>
