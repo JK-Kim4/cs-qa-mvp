@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .config import ROOT, load_settings
 from .pipeline import Pipeline
-from .ticket import NotionClient, NotionError, build_page, classify
+from .ticket import NotionClient, NotionError, close_ticket, sync_ticket
 
 settings = load_settings()
 pipeline = Pipeline(settings)
@@ -46,8 +46,19 @@ class ChatRequest(BaseModel):
     history: list[Message] = Field(default_factory=list, max_length=50)
 
 
-class TicketRequest(BaseModel):
-    messages: list[Message] = Field(min_length=1, max_length=200)
+PAGE_ID = r"^[A-Za-z0-9-]{1,64}$"  # 노션 페이지 ID. 경로에 그대로 들어가므로 형식을 제한한다.
+
+
+class TicketSync(BaseModel):
+    page_id: str | None = Field(default=None, pattern=PAGE_ID)  # 없으면 '상담 중' 카드를 새로 만든다
+    messages: list[Message] = Field(min_length=1, max_length=200)  # 아직 카드에 기록하지 않은 메시지
+
+
+class TicketClose(BaseModel):
+    page_id: str | None = Field(default=None, pattern=PAGE_ID)
+    messages: list[Message] = Field(min_length=1, max_length=500)  # 상담 전체 대화 (요약·분류용)
+    unsynced: list[Message] = Field(default_factory=list, max_length=200)  # 그중 카드에 아직 없는 메시지
+    reason: Literal["end", "escalate", "handoff"]
 
 
 @app.get("/api/status")
@@ -65,21 +76,40 @@ def chat(req: ChatRequest):
     return pipeline.compare(question, history) if req.compare else pipeline.run(question, history=history)
 
 
-@app.post("/api/tickets")
-def create_ticket(req: TicketRequest):
-    """상담 종료: 대화를 요약·분류해 노션 CS 처리 보드에 카드 한 장을 만든다."""
+def _require_notion():
     if notion is None:
         raise HTTPException(503, "노션 티켓이 설정되지 않았습니다. .env 에 NOTION_TOKEN, NOTION_DATA_SOURCE_ID 를 넣고 서버를 재시작하세요.")
-    messages = [m.model_dump() for m in req.messages]
+
+
+def _require_customer(messages):
     if not any(m["role"] == "user" for m in messages):
         raise HTTPException(422, "고객 메시지가 없는 대화로는 티켓을 만들 수 없습니다.")
-    info, warnings = classify(pipeline.llm, messages)
+
+
+@app.post("/api/tickets/sync")
+def sync(req: TicketSync):
+    """답변이 끝날 때마다 호출: 첫 호출이면 '상담 중' 카드를 만들고, 이후에는 새 메시지를 덧붙인다."""
+    _require_notion()
+    messages = [m.model_dump() for m in req.messages]
+    if req.page_id is None:
+        _require_customer(messages)
     try:
-        created = notion.create_page(build_page(notion.data_source_id, messages, info))
+        return sync_ticket(notion, req.page_id, messages)
     except NotionError as e:
         raise HTTPException(502, str(e)) from e
-    return {**created, "summary": info["summary"], "category": info["category"],
-            "priority": info["priority"], "warnings": warnings}
+
+
+@app.post("/api/tickets/close")
+def close(req: TicketClose):
+    """상담 종료 / 상담원 연결 / 담당자 처리 요청: 요약·분류해 카드를 '등록' 으로 넘긴다."""
+    _require_notion()
+    messages = [m.model_dump() for m in req.messages]
+    _require_customer(messages)
+    try:
+        return close_ticket(notion, pipeline.llm, req.page_id, messages,
+                            [m.model_dump() for m in req.unsynced], req.reason)
+    except NotionError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 @app.get("/api/guide")

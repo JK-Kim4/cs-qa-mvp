@@ -16,9 +16,19 @@ from .llm import LLMError, make_llm
 from .wiki import Wiki
 
 CANNED_PREFIX = "[LLM 미사용: 위키 대표 답변 원문입니다. 과거 특정 고객 건의 기록일 수 있습니다]\n\n"
-# 채팅 화면은 이 경로의 답변이 나오면 바로 노션 티켓을 만들어 담당자에게 넘긴다 (static/app.js createTicket).
+# 채팅 화면은 이 경로의 답변이 나오면 바로 노션 티켓을 만들어 담당자에게 넘긴다 (static/app.js closeTicket).
 ESCALATE_MESSAGE = "문의하신 내용은 정확한 안내를 위해 담당자에게 전달해 드릴게요. 담당자가 확인한 뒤 안내해 드릴게요."
 HANGUL = re.compile(r"[가-힣]")
+# 답변 LLM 이 '사람이 처리해야 하는 요청' 을 담당자에게 넘길 때 붙이는 표시 (app/llm.py ANSWER_SYSTEM).
+# 채팅 화면은 route 가 handoff 면 바로 티켓을 '등록' 으로 넘긴다.
+HANDOFF_MARKER = re.compile(r"[ \t]*\[HANDOFF\][ \t]*")
+
+
+def split_handoff(text):
+    """표시를 모두 지운 답변과 표시가 있었는지를 돌려준다."""
+    if not HANDOFF_MARKER.search(text):
+        return text, False
+    return HANDOFF_MARKER.sub(" ", text).strip(), True
 # 이어지는 질문("발송해 주세요")을 이해하도록 넘기는 이전 대화의 범위. 길수록 입력 토큰이 늘어난다.
 HISTORY_MAX_MESSAGES = 6
 HISTORY_ANSWER_CHARS = 500  # 답변 생성에 넘기는 이전 챗봇 답변은 이 길이까지만
@@ -124,7 +134,10 @@ class Pipeline:
 
         route, reason, chosen = self._decide(question, query, candidates, trace, costs, bypass_decision)
         answer = self._answer(question, route, chosen, trace, costs, prepared["history"])
-        answer_mode = next(s for s in trace["steps"] if s["key"] == "answer")["detail"]["mode"]
+        answer_detail = next(s for s in trace["steps"] if s["key"] == "answer")["detail"]
+        answer_mode = answer_detail["mode"]
+        if answer_detail.get("handoff"):
+            route, reason = "handoff", f"{reason} -> 답변 LLM 이 담당자 처리가 필요한 요청으로 표시"
 
         trace.update(
             path="bypass" if bypass_decision else "decision",
@@ -280,4 +293,7 @@ class Pipeline:
                 "cost_usd": r["cost_usd"],
                 "stop_reason": r["stop_reason"],
             }
-            return r["text"]
+            text, handoff = split_handoff(r["text"])
+            if handoff:
+                st["detail"]["handoff"] = True
+            return text

@@ -11,8 +11,9 @@ from app.pipeline import ESCALATE_MESSAGE, Pipeline
 
 
 class FakeLLM:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, answer_text="생성된 답변"):
         self.fail = fail
+        self.answer_text = answer_text
         self.answered_with = None
         self.rewrite_previous = None
         self.answer_history = None
@@ -30,7 +31,7 @@ class FakeLLM:
             raise LLMError("boom")
         self.answered_with = [path for path, _ in pages]
         self.answer_history = list(history)
-        return {**self._r("생성된 답변"), "prompt_chars": 1000}
+        return {**self._r(self.answer_text), "prompt_chars": 1000}
 
 
 class FakeDecision:
@@ -224,6 +225,27 @@ def test_english_follow_up_is_rewritten_only_when_there_is_earlier_question(sett
     assert alone["trace"]["steps"][0]["status"] == "skipped"
     assert follow["trace"]["steps"][0]["detail"]["query"] == "cancel order"
     assert llm.rewrite_previous == ["I did not get the verification code"]
+
+
+@pytest.mark.parametrize("text", [
+    "배송지 변경 요청을 담당자에게 전달했어요. 처리되면 안내해 드릴게요.\n[HANDOFF]",
+    "배송지 변경 요청을 [HANDOFF] 담당자에게 전달했어요. 처리되면 안내해 드릴게요.",
+])
+def test_handoff_marker_is_removed_and_reported_as_handoff(settings, text):
+    pipeline = Pipeline(settings, llm=FakeLLM(answer_text=text))
+
+    out = pipeline.run("주문 배송지를 바꿔 주세요")
+    cmp = pipeline.compare("주문 배송지를 바꿔 주세요")
+
+    assert "[HANDOFF]" not in out["answer"] and "담당자에게 전달했어요" in out["answer"]
+    assert out["route"] == "handoff" and out["trace"]["route"] == "handoff"
+    assert cmp["with_decision"]["route"] == "handoff"
+
+
+def test_answer_without_marker_stays_generate(settings):
+    out = Pipeline(settings, llm=FakeLLM(answer_text="주문 내역에서 바꿀 수 있어요.")).run("주문 배송지를 바꿔 주세요")
+
+    assert (out["route"], out["answer"]) == ("generate", "주문 내역에서 바꿀 수 있어요.")
 
 
 def test_decision_none_escalates_without_llm_call(settings):

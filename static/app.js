@@ -12,6 +12,9 @@ try { compareToggle.checked = localStorage.getItem("compare") === "1"; } catch {
 // 상담 종료 시 노션 티켓으로 보낼 대화. 티켓을 만들면 비우고 새 상담을 시작한다.
 // 질문할 때도 최근 대화를 함께 보내 이어지는 질문("발송해 주세요")을 이해하게 한다.
 let conversation = [];
+// 지금 상담의 노션 카드. 첫 답변 뒤에 '상담 중' 으로 만들고, conversation[0..synced) 까지 카드에 기록됐다.
+let ticket = { pageId: null, synced: 0 };
+let notionEnabled = false;
 const HISTORY_SEND = 6; // 서버가 쓰는 최근 메시지 수(app/pipeline.py HISTORY_MAX_MESSAGES)와 같게 둔다
 
 const SAMPLES = [
@@ -71,6 +74,7 @@ function md(text) {
 async function loadStatus() {
   try {
     const s = await (await fetch("/api/status")).json();
+    notionEnabled = s.notion.enabled;
     $("#guide-btn-label").textContent = `데이터 가이드 · ${s.pages}주제`;
     $("#status").innerHTML = [
       `<span class="chip ${s.decision.enabled ? "on" : "off"}">${s.decision.enabled ? `${esc(s.decision.label)} 연결됨` : "판단 모델 미설정"}</span>`,
@@ -99,6 +103,7 @@ function metaHtml(t) {
     `<div class="meta"><span class="route ${t.answer_mode}">${ROUTE_LABEL[t.answer_mode] || t.answer_mode}</span>` +
     `<span>· ${(t.total_ms / 1000).toFixed(1)}초</span><span>· ${fmtCost(t.total_cost_usd)}</span>` +
     (sources ? `<span>· 근거: ${esc(sources)}</span>` : "") +
+    (t.route === "handoff" ? `<span>· 담당자 전달</span>` : "") +
     (t.warnings.length ? `<span>· 경고 ${t.warnings.length}</span>` : "") +
     `<span>· 눌러서 상세 보기</span></div>`
   );
@@ -154,7 +159,9 @@ function syncEndBtn() {
 }
 
 async function ask(question) {
-  let escalated = false;
+  // 입력창, 예시 질문, 데이터 가이드 어디서 부르든 이전 질문과 카드 기록이 끝나기 전에는 받지 않는다.
+  if (sendBtn.disabled) return;
+  let closeReason = null;
   addMessage("user", question);
   const history = conversation.slice(-HISTORY_SEND).map(({ role, text }) => ({ role, text }));
   conversation.push({ role: "user", text: question });
@@ -177,17 +184,18 @@ async function ask(question) {
     // 비교 모드에서는 실제 운영 경로인 판단 모델 경로(A)의 답변을 기록한다.
     const sent = compare ? data.with_decision : data;
     conversation.push({ role: "bot", text: sent.answer, route: sent.route });
-    escalated = sent.route === "escalate";
+    // 상담원 연결이나 담당자 처리 요청이면 고객이 상담 종료를 누르지 않아도 바로 담당자에게 넘긴다.
+    if (sent.route === "escalate" || sent.route === "handoff") closeReason = sent.route;
   } catch (e) {
     bot.querySelector(".bubble").textContent = `요청에 실패했습니다. ${e.message}`;
-  } finally {
-    sendBtn.disabled = false;
-    syncEndBtn();
-    chat.scrollTop = chat.scrollHeight;
-    input.focus();
   }
-  // 상담원 연결로 분류되면 고객이 상담 종료를 누르지 않아도 담당자에게 넘어가도록 바로 티켓을 만든다.
-  if (escalated) await createTicket("escalate");
+  // 카드 기록이 끝날 때까지 다음 질문을 막는다 (첫 카드가 만들어지기 전에 카드가 두 장 생기지 않게).
+  if (closeReason) await closeTicket(closeReason);
+  else await syncTicket();
+  sendBtn.disabled = false;
+  syncEndBtn();
+  chat.scrollTop = chat.scrollHeight;
+  input.focus();
 }
 
 // ---- modal ----
@@ -342,44 +350,79 @@ document.addEventListener("keydown", (e) => {
   else if (!modal.hidden) closeModal();
 });
 
-// 티켓을 만드는 두 경우: 고객이 상담 종료를 눌렀을 때(end), 챗봇이 상담원 연결로 분류했을 때(escalate).
+async function postJson(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${res.status}`);
+  return data;
+}
+
+const ticketLink = (data, label) =>
+  `<a href="${esc(data.url)}" target="_blank" rel="noopener">${esc(data.cs_id)} ${esc(label)}</a>`;
+
+// 답변이 끝날 때마다 아직 기록하지 않은 메시지를 카드에 덧붙인다. 실패한 메시지는 다음 번에 다시 보낸다.
+async function syncTicket() {
+  const upto = conversation.length;
+  const pending = conversation.slice(ticket.synced, upto);
+  if (!notionEnabled || !pending.length) return;
+  try {
+    const data = await postJson("/api/tickets/sync", { page_id: ticket.pageId, messages: pending });
+    if (!ticket.pageId) {
+      addMessage("system", "").querySelector(".bubble").innerHTML =
+        `상담 내용을 노션 카드에 기록하고 있어요. ${ticketLink(data, "카드 열기")}`;
+    }
+    ticket = { pageId: data.page_id, synced: upto };
+  } catch (e) {
+    addMessage("system", `노션 카드에 기록하지 못했어요. 다음 답변 때 다시 시도합니다. ${e.message}`);
+  }
+}
+
+// 상담이 끝나는 세 경우: 고객이 상담 종료를 누름(end), 맞는 위키가 없어 상담원 연결(escalate),
+// 답변 LLM 이 담당자 처리가 필요한 요청으로 표시(handoff). 요약·분류해 카드를 '등록' 으로 넘긴다.
 const TICKET_TEXT = {
-  end: { pending: "상담을 종료하고 노션 티켓을 만드는 중…", done: "상담을 종료했어요.", fail: "티켓을 만들지 못했어요." },
+  end: { pending: "상담을 종료하고 노션 카드를 정리하는 중…", done: "상담을 종료했어요.", fail: "카드를 정리하지 못했어요." },
   escalate: {
     pending: "담당자에게 전달하는 중…",
     done: "담당자에게 전달했어요. 확인 후 안내해 드릴게요.",
     fail: "담당자에게 전달하지 못했어요. 상담 종료를 눌러 다시 시도할 수 있어요.",
   },
+  handoff: {
+    pending: "담당자에게 처리를 요청하는 중…",
+    done: "담당자에게 처리를 요청했어요. 처리되면 안내해 드릴게요.",
+    fail: "담당자에게 처리를 요청하지 못했어요. 상담 종료를 눌러 다시 시도할 수 있어요.",
+  },
 };
 
-async function createTicket(trigger) {
-  const text = TICKET_TEXT[trigger];
-  sendBtn.disabled = true;
-  syncEndBtn();
-  const note = addMessage("system", text.pending);
-  const bubble = note.querySelector(".bubble");
+async function closeTicket(reason) {
+  const text = TICKET_TEXT[reason];
+  const bubble = addMessage("system", text.pending).querySelector(".bubble");
   try {
-    const res = await fetch("/api/tickets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: conversation }),
+    const data = await postJson("/api/tickets/close", {
+      page_id: ticket.pageId,
+      messages: conversation,
+      unsynced: conversation.slice(ticket.synced),
+      reason,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${res.status}`);
     bubble.innerHTML =
-      `${esc(text.done)} <a href="${esc(data.url)}" target="_blank" rel="noopener">${esc(data.cs_id)} 티켓 열기</a>` +
+      `${esc(text.done)} ${ticketLink(data, "티켓 열기")}` +
       `<br>${esc(data.summary)} · ${esc(data.category)} · ${esc(data.priority)}` +
       data.warnings.map((w) => `<br><span class="warn">${esc(w)}</span>`).join("");
     conversation = [];
+    ticket = { pageId: null, synced: 0 };
   } catch (e) {
     bubble.textContent = `${text.fail} ${e.message}`;
-  } finally {
-    sendBtn.disabled = false;
-    syncEndBtn();
-    chat.scrollTop = chat.scrollHeight;
   }
+  chat.scrollTop = chat.scrollHeight;
 }
-endBtn.addEventListener("click", () => { if (!endBtn.disabled) createTicket("end"); });
+
+endBtn.addEventListener("click", async () => {
+  if (endBtn.disabled) return;
+  sendBtn.disabled = true;
+  syncEndBtn();
+  await closeTicket("end");
+  sendBtn.disabled = false;
+  syncEndBtn();
+});
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
