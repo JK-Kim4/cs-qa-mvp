@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -7,9 +8,11 @@ from pydantic import BaseModel, Field
 
 from .config import ROOT, load_settings
 from .pipeline import Pipeline
+from .ticket import NotionClient, NotionError, build_page, classify
 
 settings = load_settings()
 pipeline = Pipeline(settings)
+notion = NotionClient(settings.notion_token, settings.notion_data_source_id) if settings.notion_enabled else None
 app = FastAPI(title="CS QA MVP")
 
 
@@ -27,16 +30,29 @@ _st = pipeline.status()
 log = logging.getLogger("uvicorn.error")
 log.info("LLM: %s", f"{settings.llm_provider} / {settings.llm_model}" if _st["llm"]["enabled"] else f"미설정 ({settings.llm_key_name} 없음)")
 log.info("판단 모델: %s (%s)", _st["decision"]["label"] if _st["decision"]["enabled"] else "미설정", _st["decision"]["reason"])
+log.info("노션 티켓: %s", f"사용 (보드 {settings.notion_data_source_id})" if notion else "미설정 (NOTION_TOKEN, NOTION_DATA_SOURCE_ID 필요)")
+
+
+class Message(BaseModel):
+    role: Literal["user", "bot"]
+    text: str = Field(min_length=1, max_length=20000)
+    route: str | None = None  # 답변 메시지의 라우팅 결과 (generate | direct | escalate)
 
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     compare: bool = False  # 비교 모드: 판단 모델 경로와 바이패스 경로를 함께 실행
+    # 이번 질문 앞의 대화. 파이프라인은 이 중 최근 메시지만 쓴다 (pipeline.HISTORY_MAX_MESSAGES).
+    history: list[Message] = Field(default_factory=list, max_length=50)
+
+
+class TicketRequest(BaseModel):
+    messages: list[Message] = Field(min_length=1, max_length=200)
 
 
 @app.get("/api/status")
 def status():
-    return pipeline.status()
+    return {**pipeline.status(), "notion": {"enabled": notion is not None}}
 
 
 # def(동기)로 두면 FastAPI 가 스레드풀에서 돌려서 느린 API 호출이 서버 전체를 막지 않는다.
@@ -45,7 +61,25 @@ def chat(req: ChatRequest):
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "질문이 비어 있습니다.")
-    return pipeline.compare(question) if req.compare else pipeline.run(question)
+    history = [m.model_dump() for m in req.history]
+    return pipeline.compare(question, history) if req.compare else pipeline.run(question, history=history)
+
+
+@app.post("/api/tickets")
+def create_ticket(req: TicketRequest):
+    """상담 종료: 대화를 요약·분류해 노션 CS 처리 보드에 카드 한 장을 만든다."""
+    if notion is None:
+        raise HTTPException(503, "노션 티켓이 설정되지 않았습니다. .env 에 NOTION_TOKEN, NOTION_DATA_SOURCE_ID 를 넣고 서버를 재시작하세요.")
+    messages = [m.model_dump() for m in req.messages]
+    if not any(m["role"] == "user" for m in messages):
+        raise HTTPException(422, "고객 메시지가 없는 대화로는 티켓을 만들 수 없습니다.")
+    info, warnings = classify(pipeline.llm, messages)
+    try:
+        created = notion.create_page(build_page(notion.data_source_id, messages, info))
+    except NotionError as e:
+        raise HTTPException(502, str(e)) from e
+    return {**created, "summary": info["summary"], "category": info["category"],
+            "priority": info["priority"], "warnings": warnings}
 
 
 @app.get("/api/guide")

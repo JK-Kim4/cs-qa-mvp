@@ -14,18 +14,22 @@ class FakeLLM:
     def __init__(self, fail=False):
         self.fail = fail
         self.answered_with = None
+        self.rewrite_previous = None
+        self.answer_history = None
 
     def _r(self, text):
         return {"text": text, "model": "fake", "stop_reason": "end_turn",
                 "usage": {"input_tokens": 100, "output_tokens": 10}, "cost_usd": 0.001, "latency_ms": 1}
 
-    def rewrite_query(self, question):
+    def rewrite_query(self, question, previous=()):
+        self.rewrite_previous = list(previous)
         return self._r("cancel order")
 
-    def answer(self, question, pages):
+    def answer(self, question, pages, history=()):
         if self.fail:
             raise LLMError("boom")
         self.answered_with = [path for path, _ in pages]
+        self.answer_history = list(history)
         return {**self._r("생성된 답변"), "prompt_chars": 1000}
 
 
@@ -54,7 +58,7 @@ class FakeDecision:
 
 @pytest.fixture
 def settings(monkeypatch):
-    for k in ("LLM_PROVIDER", "LLM_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "DECISION_PROVIDER", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD"):
+    for k in ("LLM_PROVIDER", "LLM_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "DECISION_PROVIDER", "DECISION_ENDPOINT", "DECISION_DEPLOYMENT", "DECISION_API_KEY", "DIRECT_ANSWER_THRESHOLD", "NOTION_TOKEN", "NOTION_DATA_SOURCE_ID"):
         monkeypatch.setenv(k, "")
     return load_settings()
 
@@ -97,6 +101,26 @@ def test_openai_response_parsing():
         llm.answer("q", [("wiki/a.md", "body")])
     with pytest.raises(LLMError, match="max_output_tokens"):
         llm.answer("q", [("wiki/a.md", "body")])
+
+
+def test_llm_prompts_include_earlier_messages_only_when_given():
+    from types import SimpleNamespace
+
+    ok = SimpleNamespace(output=[], output_text="q", status="completed", incomplete_details=None,
+                         model="gpt-5-mini", usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+    llm = OpenAIChat("sk-test", "gpt-5-mini", "medium", "gpt-5-mini")
+    calls = []
+    llm.client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kw: calls.append(kw) or ok))
+
+    llm.rewrite_query("발송해주세요")
+    llm.rewrite_query("발송해주세요", ["인증 메일이 안 와요"])
+    llm.answer("발송해주세요", [("wiki/a.md", "body")], [{"role": "user", "text": "인증 메일이 안 와요"},
+                                                        {"role": "bot", "text": "재발송해 드릴까요?"}])
+
+    assert calls[0]["input"] == "발송해주세요"
+    assert calls[1]["input"] == ("<earlier_customer_messages>\n- 인증 메일이 안 와요\n</earlier_customer_messages>\n"
+                                 "<latest_message>\n발송해주세요\n</latest_message>")
+    assert calls[2]["input"].startswith("<conversation>\n고객: 인증 메일이 안 와요\n상담원: 재발송해 드릴까요?\n</conversation>\n\n<wiki>")
 
 
 def test_decision_provider_selection(settings, monkeypatch):
@@ -167,6 +191,39 @@ def test_korean_is_rewritten_then_generated(settings):
     assert rewrite["detail"]["query"] == "cancel order"
     assert out["answer"] == "생성된 답변"
     assert llm.answered_with[0] == "wiki/bitext/order/cancel-order.md"
+
+
+def test_follow_up_question_carries_recent_conversation_into_rewrite_and_answer(settings):
+    old = [{"role": "user", "text": f"오래된 질문 {i}"} for i in range(2)]
+    recent = [
+        {"role": "user", "text": "인증 메일이 안 와요"},
+        {"role": "bot", "text": "재" * 700},
+        {"role": "user", "text": "휴대폰 번호로 인증할게요"},
+        {"role": "bot", "text": "인증 코드를 보내 드릴까요?"},
+        {"role": "user", "text": "계정은 helloTest 입니다"},
+        {"role": "bot", "text": "확인했습니다."},
+    ]
+    llm = FakeLLM()
+
+    out = Pipeline(settings, llm=llm).run("발송해주세요", history=old + recent)
+
+    # 최근 6개 메시지만 쓰고, 검색어 변환에는 고객 질문만, 답변 생성에는 챗봇 답변을 500자로 잘라 넘긴다.
+    assert llm.rewrite_previous == ["인증 메일이 안 와요", "휴대폰 번호로 인증할게요", "계정은 helloTest 입니다"]
+    assert llm.answer_history[1] == {"role": "bot", "text": "재" * 500 + "…"}
+    assert llm.answer_history[2:] == recent[2:]
+    assert out["trace"]["history_messages"] == 6
+
+
+def test_english_follow_up_is_rewritten_only_when_there_is_earlier_question(settings):
+    llm = FakeLLM()
+    pipeline = Pipeline(settings, llm=llm)
+
+    alone = pipeline.run("yes please send it")
+    follow = pipeline.run("yes please send it", history=[{"role": "user", "text": "I did not get the verification code"}])
+
+    assert alone["trace"]["steps"][0]["status"] == "skipped"
+    assert follow["trace"]["steps"][0]["detail"]["query"] == "cancel order"
+    assert llm.rewrite_previous == ["I did not get the verification code"]
 
 
 def test_decision_none_escalates_without_llm_call(settings):
@@ -242,3 +299,18 @@ def test_http_api(settings):
     assert len(topics) == 87 and all(t["examples"] and "{{" not in t["answer"] for t in topics)
     cmp = client.post("/api/chat", json={"question": "refund please", "compare": True}).json()
     assert cmp["with_decision"]["trace"]["steps"] and cmp["bypass"]["trace"]["path"] == "bypass"
+
+
+def test_chat_api_passes_history_to_pipeline(settings):
+    from app.main import app
+
+    client = TestClient(app)
+    history = [{"role": "user", "text": "refund please"}, {"role": "bot", "text": "Sure."}]
+
+    single = client.post("/api/chat", json={"question": "how long does it take", "history": history}).json()
+    cmp = client.post("/api/chat", json={"question": "how long does it take", "history": history, "compare": True}).json()
+
+    assert single["trace"]["history_messages"] == 2
+    assert cmp["with_decision"]["trace"]["history_messages"] == 2
+    bad = client.post("/api/chat", json={"question": "x", "history": [{"role": "agent", "text": "hi"}]})
+    assert bad.status_code == 422

@@ -3,11 +3,16 @@ const chat = $("#chat");
 const input = $("#input");
 const form = $("#composer");
 const sendBtn = $("#send");
+const endBtn = $("#end-chat");
 const modal = $("#modal");
 const modalBody = $("#modal-body");
 const traces = new Map();
 const compareToggle = $("#compare");
 try { compareToggle.checked = localStorage.getItem("compare") === "1"; } catch {}
+// 상담 종료 시 노션 티켓으로 보낼 대화. 티켓을 만들면 비우고 새 상담을 시작한다.
+// 질문할 때도 최근 대화를 함께 보내 이어지는 질문("발송해 주세요")을 이해하게 한다.
+let conversation = [];
+const HISTORY_SEND = 6; // 서버가 쓰는 최근 메시지 수(app/pipeline.py HISTORY_MAX_MESSAGES)와 같게 둔다
 
 const SAMPLES = [
   "주문을 취소하고 싶어요",
@@ -70,6 +75,7 @@ async function loadStatus() {
     $("#status").innerHTML = [
       `<span class="chip ${s.decision.enabled ? "on" : "off"}">${s.decision.enabled ? `${esc(s.decision.label)} 연결됨` : "판단 모델 미설정"}</span>`,
       `<span class="chip ${s.llm.enabled ? "on" : "off"}">LLM ${s.llm.enabled ? esc(s.llm.model) : "미설정"}</span>`,
+      `<span class="chip ${s.notion.enabled ? "on" : "off"}">노션 ${s.notion.enabled ? "연결됨" : "미설정"}</span>`,
     ].join("");
   } catch {
     $("#status").textContent = "서버 상태를 불러오지 못했습니다";
@@ -142,30 +148,46 @@ function attachCompare(el, data) {
   );
 }
 
+// 답변을 한 번이라도 받은 뒤, 요청 중이 아닐 때만 상담을 끝낼 수 있다 (같은 대화로 티켓이 두 번 생기지 않게).
+function syncEndBtn() {
+  endBtn.disabled = sendBtn.disabled || !conversation.some((m) => m.role === "bot");
+}
+
 async function ask(question) {
+  let escalated = false;
   addMessage("user", question);
+  const history = conversation.slice(-HISTORY_SEND).map(({ role, text }) => ({ role, text }));
+  conversation.push({ role: "user", text: question });
   const bot = addMessage("bot", "");
   bot.querySelector(".bubble").innerHTML = `<span class="typing">위키를 찾는 중…</span>`;
   sendBtn.disabled = true;
+  syncEndBtn();
   try {
     const compare = compareToggle.checked;
     if (compare) bot.querySelector(".bubble").innerHTML = `<span class="typing">두 경로로 답을 만드는 중…</span>`;
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, compare }),
+      body: JSON.stringify({ question, compare, history }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
     const data = await res.json();
     if (compare) attachCompare(bot, data);
     else attachResult(bot, data);
+    // 비교 모드에서는 실제 운영 경로인 판단 모델 경로(A)의 답변을 기록한다.
+    const sent = compare ? data.with_decision : data;
+    conversation.push({ role: "bot", text: sent.answer, route: sent.route });
+    escalated = sent.route === "escalate";
   } catch (e) {
     bot.querySelector(".bubble").textContent = `요청에 실패했습니다. ${e.message}`;
   } finally {
     sendBtn.disabled = false;
+    syncEndBtn();
     chat.scrollTop = chat.scrollHeight;
     input.focus();
   }
+  // 상담원 연결로 분류되면 고객이 상담 종료를 누르지 않아도 담당자에게 넘어가도록 바로 티켓을 만든다.
+  if (escalated) await createTicket("escalate");
 }
 
 // ---- modal ----
@@ -229,7 +251,7 @@ function renderStep(s, trace) {
   const d = s.detail || {};
   const picked = chosenIds(trace);
   let body = "";
-  if (s.key === "rewrite") body = kv([["변환된 검색어", esc(d.query)], ["모델", esc(d.model)], ["토큰", usageText(d.usage)], ["비용", d.cost_usd !== undefined ? fmtCost(d.cost_usd) : null]]);
+  if (s.key === "rewrite") body = kv([["변환된 검색어", esc(d.query)], ["반영한 이전 질문", d.previous_questions?.length ? d.previous_questions.map(esc).join("<br>") : null], ["모델", esc(d.model)], ["토큰", usageText(d.usage)], ["비용", d.cost_usd !== undefined ? fmtCost(d.cost_usd) : null]]);
   if (s.key === "search") body = renderSearch(d, picked);
   if (s.key === "decide") body = renderDecide(d, picked);
   if (s.key === "answer")
@@ -237,6 +259,7 @@ function renderStep(s, trace) {
       ["방식", esc(d.mode)],
       ["모델", esc(d.model)],
       ["effort", esc(d.effort)],
+      ["넘긴 이전 대화", d.mode === "generate" && trace.history_messages ? `최근 ${trace.history_messages}개 메시지` : null],
       ["근거 파일", d.sources ? d.sources.map((p) => `<span class="path">${esc(p)}</span>`).join("<br>") : d.source ? `<span class="path">${esc(d.source)}</span>` : null],
       ["프롬프트 길이", d.prompt_chars ? `${d.prompt_chars.toLocaleString()}자` : null],
       ["토큰", usageText(d.usage)],
@@ -318,6 +341,45 @@ document.addEventListener("keydown", (e) => {
   else if (!guide.hidden) closeGuide();
   else if (!modal.hidden) closeModal();
 });
+
+// 티켓을 만드는 두 경우: 고객이 상담 종료를 눌렀을 때(end), 챗봇이 상담원 연결로 분류했을 때(escalate).
+const TICKET_TEXT = {
+  end: { pending: "상담을 종료하고 노션 티켓을 만드는 중…", done: "상담을 종료했어요.", fail: "티켓을 만들지 못했어요." },
+  escalate: {
+    pending: "담당자에게 전달하는 중…",
+    done: "담당자에게 전달했어요. 확인 후 안내해 드릴게요.",
+    fail: "담당자에게 전달하지 못했어요. 상담 종료를 눌러 다시 시도할 수 있어요.",
+  },
+};
+
+async function createTicket(trigger) {
+  const text = TICKET_TEXT[trigger];
+  sendBtn.disabled = true;
+  syncEndBtn();
+  const note = addMessage("system", text.pending);
+  const bubble = note.querySelector(".bubble");
+  try {
+    const res = await fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: conversation }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${res.status}`);
+    bubble.innerHTML =
+      `${esc(text.done)} <a href="${esc(data.url)}" target="_blank" rel="noopener">${esc(data.cs_id)} 티켓 열기</a>` +
+      `<br>${esc(data.summary)} · ${esc(data.category)} · ${esc(data.priority)}` +
+      data.warnings.map((w) => `<br><span class="warn">${esc(w)}</span>`).join("");
+    conversation = [];
+  } catch (e) {
+    bubble.textContent = `${text.fail} ${e.message}`;
+  } finally {
+    sendBtn.disabled = false;
+    syncEndBtn();
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+endBtn.addEventListener("click", () => { if (!endBtn.disabled) createTicket("end"); });
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();

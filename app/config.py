@@ -49,6 +49,13 @@ class Settings:
     min_confidence: float
     direct_threshold: float | None
     second_page_min: float
+    # 노션 티켓: 상담 종료 시 CS 처리 보드(데이터 소스)에 카드를 만든다. 둘 다 있어야 켜진다.
+    notion_token: str | None
+    notion_data_source_id: str | None
+
+    @property
+    def notion_enabled(self):
+        return bool(self.notion_token and self.notion_data_source_id)
 
     @property
     def llm_key_name(self):
@@ -92,4 +99,6 @@ def load_settings():
         min_confidence=_float("MIN_CONFIDENCE", 0.5),
         direct_threshold=float(direct) if direct else None,
         second_page_min=_float("SECOND_PAGE_MIN", 0.2),
+        notion_token=os.getenv("NOTION_TOKEN") or None,
+        notion_data_source_id=os.getenv("NOTION_DATA_SOURCE_ID") or None,
     )
