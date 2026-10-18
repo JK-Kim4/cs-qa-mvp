@@ -105,6 +105,13 @@ body {
   font: inherit; font-weight: 600; cursor: pointer;
 }
 .composer button:disabled { opacity: .5; cursor: default; }
+.composer .end-btn { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+
+/* 상담 종료 안내: 대화 가운데에 작게 */
+.msg.system { align-self: center; align-items: center; max-width: 92%; }
+.msg.system .bubble { background: var(--chip-bg); color: var(--text); font-size: 13.5px; line-height: 1.6; text-align: center; }
+.msg.system a { color: var(--accent); font-weight: 600; }
+.msg.system .warn { color: var(--warn); font-size: 12.5px; }
 
 /* modal */
 .modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; }

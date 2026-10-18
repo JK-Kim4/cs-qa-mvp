@@ -20,7 +20,9 @@ PRICING = {
 
 REWRITE_SYSTEM = (
     "You turn a customer-support message into a short English keyword search query. "
-    "Output only the query: 3-12 lowercase English words, no punctuation, no explanation."
+    "Output only the query: 3-12 lowercase English words, no punctuation, no explanation. "
+    "Earlier customer messages may be given for context: use them only to resolve what the latest message "
+    "refers to. The query must describe the latest message."
 )
 
 ANSWER_SYSTEM = """당신은 고객센터 상담원입니다. 아래 <wiki> 안의 사내 위키 페이지만 근거로 고객 질문에 답합니다.
@@ -30,8 +32,13 @@ ANSWER_SYSTEM = """당신은 고객센터 상담원입니다. 아래 <wiki> 안�
 - 위키에 없는 정책, 금액, 기한, 연락처를 지어내지 않습니다.
 - 위키의 대표 답변과 답변 사례는 과거 특정 고객 건의 기록입니다. 그 건의 금액, 날짜, 주문번호를 지금 고객 것처럼 쓰거나, 환불·크레딧 지급처럼 이미 처리한 조치로 말하지 않습니다. 처리 방법과 절차만 안내합니다.
 - 위키의 {{Order Number}} 같은 자리표시자는 그대로 쓰지 말고 "주문 번호" 처럼 일반적인 표현으로 바꿉니다.
-- 위키 내용이 질문과 맞지 않으면 추측하지 말고, 담당 상담원에게 연결하겠다고 짧게 안내합니다.
-- 답변은 간결하게, 필요한 경우 단계별 목록으로 씁니다."""
+- 위키 내용이 질문과 맞지 않으면 추측하지 말고, 담당자에게 전달하겠다고 짧게 안내합니다.
+- 주문·배송지 변경, 취소·환불 처리, 계정 정보 변경, 인증 코드 발송처럼 시스템에서 실제 조치가 필요한 일은 당신이 할 수 없습니다. 처리했다거나 처리하겠다고 말하지 않습니다.
+- 그런 요청이 확정되고 담당자가 처리하는 데 필요한 정보가 대화에 있으면, 담당자에게 전달했으며 처리되면 안내한다고 답합니다.
+- 담당자에게 전달하거나 연결한다고 말하는 답변은 반드시 마지막 줄에 [HANDOFF] 를 씁니다. 그 밖의 답변에는 쓰지 않습니다.
+- 고객에게 질문하거나 추가 정보를 요청하는 답변에는 [HANDOFF] 를 쓰지 않습니다. 필요한 정보를 받은 다음 답변에서 씁니다.
+- 답변은 간결하게, 필요한 경우 단계별 목록으로 씁니다.
+- <conversation> 이 있으면 지금까지의 대화입니다. 마지막 질문이 앞 대화를 이어 받는 말(예: "발송해 주세요")이면 그 맥락으로 이해하고 이어서 답합니다. 사실의 근거는 여전히 <wiki> 만 씁니다."""
 
 
 class LLMError(RuntimeError):
@@ -91,15 +98,27 @@ class Claude:
             "latency_ms": round((time.perf_counter() - start) * 1000),
         }
 
-    def rewrite_query(self, question):
-        return self._call(self.rewrite_model, REWRITE_SYSTEM, question, "low", 2000)
+    def rewrite_query(self, question, previous=()):
+        user = question
+        if previous:
+            earlier = "\n".join(f"- {q}" for q in previous)
+            user = (f"<earlier_customer_messages>\n{earlier}\n</earlier_customer_messages>\n"
+                    f"<latest_message>\n{question}\n</latest_message>")
+        return self._call(self.rewrite_model, REWRITE_SYSTEM, user, "low", 2000)
 
-    def answer(self, question, pages):
+    def answer(self, question, pages, history=()):
         wiki = "\n\n".join(f'<page path="{path}">\n{body}\n</page>' for path, body in pages)
         user = f"<wiki>\n{wiki}\n</wiki>\n\n<question>\n{question}\n</question>"
+        if history:
+            lines = "\n".join(f"{'고객' if m['role'] == 'user' else '상담원'}: {m['text']}" for m in history)
+            user = f"<conversation>\n{lines}\n</conversation>\n\n" + user
         result = self._call(self.model, ANSWER_SYSTEM, user, self.effort, 8000)
         result["prompt_chars"] = len(ANSWER_SYSTEM) + len(user)
         return result
+
+    def summarize_ticket(self, system, transcript):
+        """상담 종료 시 대화를 티켓용으로 요약·분류한다. 프롬프트는 app/ticket.py 가 정한다."""
+        return self._call(self.rewrite_model, system, transcript, "low", 4000)
 
 
 class OpenAIChat:
@@ -158,6 +177,7 @@ class OpenAIChat:
 
     rewrite_query = Claude.rewrite_query
     answer = Claude.answer
+    summarize_ticket = Claude.summarize_ticket
 
 
 def make_llm(settings):
